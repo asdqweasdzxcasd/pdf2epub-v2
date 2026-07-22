@@ -10,6 +10,7 @@ build/
 .pytest_cache/
 *.epub
 *.pdf
+!samples/sample.pdf
 /data/
 /models/
 /output/
