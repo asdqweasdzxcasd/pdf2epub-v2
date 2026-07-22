@@ -1,0 +1,174 @@
+{
+ "model": "mistral-ocr-latest",
+ "pages": [
+  {
+   "index": 0,
+   "markdown": "(저작권 문제로 더미 치환됨)",
+   "tables": [],
+   "hyperlinks": [],
+   "header": null,
+   "footer": null,
+   "dimensions": {
+    "dpi": 51,
+    "height": 1020,
+    "width": 574
+   },
+   "confidence_scores": null,
+   "blocks": [
+    {
+     "top_left_x": 379,
+     "top_left_y": 254,
+     "bottom_right_x": 432,
+     "bottom_right_y": 269,
+     "content": "더미 텍스트 블록 1 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "header"
+    },
+    {
+     "top_left_x": 395,
+     "top_left_y": 287,
+     "bottom_right_x": 461,
+     "bottom_right_y": 339,
+     "content": "더미 텍스트 블록 2 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "title"
+    },
+    {
+     "top_left_x": 222,
+     "top_left_y": 376,
+     "bottom_right_x": 461,
+     "bottom_right_y": 401,
+     "content": "더미 텍스트 블록 3 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "title"
+    },
+    {
+     "top_left_x": 365,
+     "top_left_y": 438,
+     "bottom_right_x": 461,
+     "bottom_right_y": 454,
+     "content": "더미 텍스트 블록 4 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "title"
+    },
+    {
+     "top_left_x": 362,
+     "top_left_y": 456,
+     "bottom_right_x": 461,
+     "bottom_right_y": 553,
+     "content": "더미 텍스트 블록 5 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "list"
+    }
+   ]
+  },
+  {
+   "index": 1,
+   "markdown": "(저작권 문제로 더미 치환됨)",
+   "tables": [],
+   "hyperlinks": [],
+   "header": null,
+   "footer": null,
+   "dimensions": {
+    "dpi": 51,
+    "height": 1020,
+    "width": 574
+   },
+   "confidence_scores": null,
+   "blocks": [
+    {
+     "top_left_x": 92,
+     "top_left_y": 202,
+     "bottom_right_x": 149,
+     "bottom_right_y": 285,
+     "content": "더미 텍스트 블록 6 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "image",
+     "image_id": "img-0.jpeg"
+    },
+    {
+     "top_left_x": 159,
+     "top_left_y": 239,
+     "bottom_right_x": 283,
+     "bottom_right_y": 259,
+     "content": "더미 텍스트 블록 7 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "title"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 310,
+     "bottom_right_x": 441,
+     "bottom_right_y": 376,
+     "content": "더미 텍스트 블록 8 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "text"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 386,
+     "bottom_right_x": 441,
+     "bottom_right_y": 450,
+     "content": "더미 텍스트 블록 9 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "text"
+    },
+    {
+     "top_left_x": 107,
+     "top_left_y": 476,
+     "bottom_right_x": 149,
+     "bottom_right_y": 489,
+     "content": "더미 텍스트 블록 10 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "title"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 504,
+     "bottom_right_x": 441,
+     "bottom_right_y": 553,
+     "content": "더미 텍스트 블록 11 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "text"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 572,
+     "bottom_right_x": 439,
+     "bottom_right_y": 709,
+     "content": "더미 텍스트 블록 12 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "image",
+     "image_id": "img-1.jpeg"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 713,
+     "bottom_right_x": 208,
+     "bottom_right_y": 724,
+     "content": "더미 텍스트 블록 13 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "caption"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 743,
+     "bottom_right_x": 277,
+     "bottom_right_y": 754,
+     "content": "더미 텍스트 블록 14 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "references"
+    },
+    {
+     "top_left_x": 92,
+     "top_left_y": 785,
+     "bottom_right_x": 268,
+     "bottom_right_y": 795,
+     "content": "더미 텍스트 블록 15 — 구조 검증용 문장이다.",
+     "confidence_scores": null,
+     "type": "footer"
+    }
+   ]
+  }
+ ]
+}

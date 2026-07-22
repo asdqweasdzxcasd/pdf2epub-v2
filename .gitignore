@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.epub
+*.pdf
+/data/
+/models/
+/output/
+.DS_Store
+
+# Claude Code 로컬 설정 (대화 기록/세션은 절대 commit X)
+.claude/
+
+# 테스트 데이터 (저작권 있는 책 페이지 — 절대 공개 금지)
+testdata/
+
+# 로컬 벤치/CLI 검증용 가상환경
+.venv-bench/
+.venv-cli-check/
+
+# SDD 진행 장부 (로컬 스크래치)
+.superpowers/

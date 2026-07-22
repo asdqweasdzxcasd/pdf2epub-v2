@@ -1,0 +1,6 @@
+# 로컬 CLI 전용 (웹서비스·Surya 불필요) — pip install -r requirements-cli.txt
+PyMuPDF>=1.24.0
+pillow>=10.0
+requests
+ebooklib>=0.18
+pydantic-settings>=2.0

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF → EPUB 변환기</title>
+    <link rel="canonical" href="https://example.com/ebook/">
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-2xl mx-auto px-4 py-12">
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">PDF → EPUB 변환기</h1>
+        <p class="text-gray-600 mb-8">
+            PDF를 리플로우 EPUB3로 변환합니다 (한국어·영어). 최대 {{ max_mb }}MB.
+        </p>
+
+        <!-- 토스트 컨테이너 (우상단 고정) -->
+        <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
+
+        <form id="upload-form" action="{{ root_path }}/upload" method="post" enctype="multipart/form-data" class="space-y-4">
+            <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center bg-white">
+                <input type="file" name="file" accept="application/pdf" required
+                       class="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700">
+            </div>
+            <button type="submit" id="submit-btn"
+                    class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-lg transition">
+                변환 시작
+            </button>
+        </form>
+
+        <div class="text-xs text-gray-500 mt-6 leading-5 space-y-2">
+            <p>
+                <span class="font-semibold text-gray-700">변환 방식</span> · 텍스트 PDF는 텍스트와 이미지가 함께 추출됩니다.
+                스캔(이미지) PDF는 페이지를 이미지 그대로 임베드합니다 (텍스트 검색 불가).
+                스캔 PDF의 텍스트 추출(OCR)과 시각 디자인 보존은 추후 업데이트에서 지원할 예정입니다.
+            </p>
+            <p>
+                <span class="font-semibold text-gray-700">저작권</span> · 본인이 정당하게 소장하거나
+                자유 이용이 허락된 PDF만 업로드해 주세요. 제3자 저작물의 무단 변환·배포는 금지됩니다.
+            </p>
+            <p>
+                <span class="font-semibold text-gray-700">보안 및 보존</span> · 업로드된 원본은 변환 직후 즉시 삭제되며,
+                결과 EPUB은 24시간 후 자동 삭제됩니다. 다운로드 후엔 본인 환경에서 보관해 주세요.
+            </p>
+            <p>
+                <span class="font-semibold text-gray-700">동시 처리</span> · 한 사용자는 한 번에 1건만 변환할 수 있습니다.
+                진행 중인 변환이 완료된 후 새로운 요청을 보낼 수 있습니다.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const submitBtn = document.getElementById('submit-btn');
+        const toastContainer = document.getElementById('toast-container');
+
+        function showToast(message, kind = 'error') {
+            const colors = kind === 'error'
+                ? 'bg-red-50 border-red-200 text-red-800'
+                : 'bg-green-50 border-green-200 text-green-800';
+            const toast = document.createElement('div');
+            toast.className = `pointer-events-auto max-w-sm border rounded-lg p-4 shadow-lg flex items-start gap-3 transition-opacity ${colors}`;
+            toast.innerHTML = `
+                <p class="text-sm flex-1">${message}</p>
+                <button type="button" class="text-current opacity-60 hover:opacity-100 text-lg leading-none">×</button>
+            `;
+            toast.querySelector('button').onclick = () => toast.remove();
+            toastContainer.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(form);
+            submitBtn.disabled = true;
+            submitBtn.textContent = '업로드 중...';
+            try {
+                const res = await fetch(form.action, {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'Accept': 'application/json' },
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    window.location.href = data.status_url;
+                    return;
+                }
+                const err = await res.json().catch(() => ({ detail: '업로드 실패' }));
+                showToast(err.detail || '업로드 실패');
+            } catch (e) {
+                showToast('네트워크 오류가 발생했습니다.');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '변환 시작';
+            }
+        });
+    </script>
+</body>
+</html>

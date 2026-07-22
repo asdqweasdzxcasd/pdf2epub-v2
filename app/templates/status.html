@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>변환 진행 중...</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-2xl mx-auto px-4 py-12">
+        <h1 class="text-2xl font-bold text-gray-900 mb-6" id="title">변환 중...</h1>
+
+        <div class="bg-white border rounded-lg p-6 space-y-4">
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-gray-700" id="stage">대기 중</span>
+                <span class="text-sm font-mono text-gray-500" id="percent">0%</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div id="bar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+            </div>
+            <p class="text-sm text-gray-600" id="message"></p>
+        </div>
+
+        <div id="result" class="mt-6 hidden">
+            <a id="download-link" href="#"
+               class="block w-full text-center bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg">
+                EPUB 다운로드
+            </a>
+            <a href="{{ root_path }}/" class="block text-center mt-3 text-sm text-gray-600 underline">
+                새 파일 변환하기
+            </a>
+        </div>
+
+        <div id="error-box" class="mt-6 hidden bg-red-50 border border-red-200 rounded-lg p-4">
+            <p class="text-sm font-medium text-red-800">변환 실패</p>
+            <p class="text-sm text-red-700 mt-1" id="error-message"></p>
+            <a href="{{ root_path }}/" class="inline-block mt-3 text-sm text-red-700 underline">처음으로 돌아가기</a>
+        </div>
+    </div>
+
+    <script>
+        const jobId = {{ job_id|tojson }};
+        const rootPath = {{ root_path|tojson }};
+        let pollInterval = null;
+
+        async function poll() {
+            try {
+                const res = await fetch(`${rootPath}/jobs/${jobId}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+
+                document.getElementById('percent').textContent = `${data.progress}%`;
+                document.getElementById('bar').style.width = `${data.progress}%`;
+                document.getElementById('stage').textContent = data.stage || data.status;
+                document.getElementById('message').textContent = data.message || '';
+                if (data.title) {
+                    document.getElementById('title').textContent = data.title;
+                }
+
+                if (data.status === 'done') {
+                    clearInterval(pollInterval);
+                    document.getElementById('result').classList.remove('hidden');
+                    document.getElementById('download-link').href = `${rootPath}/download/${jobId}`;
+                } else if (data.status === 'failed') {
+                    clearInterval(pollInterval);
+                    document.getElementById('error-box').classList.remove('hidden');
+                    document.getElementById('error-message').textContent = data.error || '알 수 없는 오류';
+                }
+            } catch (e) {
+                console.error('Poll error:', e);
+            }
+        }
+
+        poll();
+        pollInterval = setInterval(poll, 2000);
+    </script>
+</body>
+</html>
