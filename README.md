@@ -72,7 +72,7 @@ PDF → render pages → Mistral OCR (block detection) → crop diagrams +
 
 1. Each page is rendered to an image and, if present, its embedded text
    layer is read directly (no API call, no cost).
-2. For image/scanned pages, the rendered image is sent to Mistral OCR, which
+2. For image/scanned pages, the scanned pages are sent to Mistral OCR (as PDF chunks), which
    returns text plus block-level layout (paragraphs, headings, figures,
    tables).
 3. Diagram blocks are cropped out of the original page render and embedded
@@ -84,8 +84,8 @@ PDF → render pages → Mistral OCR (block detection) → crop diagrams +
 ## Data flow & privacy
 
 - Text PDFs never leave your machine — the free path does no network calls.
-- For image/scanned PDFs, only the rendered page images are sent to
-  Mistral's OCR API (BYOK — you supply your own `MISTRAL_API_KEY`). No other
+- For image/scanned PDFs, the scanned pages themselves are sent to
+  Mistral's OCR API (in 40-page PDF chunks) (BYOK — you supply your own `MISTRAL_API_KEY`). No other
   service sees your document.
 - **Free tier warning**: Mistral's free "Experiment" tier (no credit card
   required) may use submitted inputs for model training. If you're
@@ -115,7 +115,7 @@ PDF → render pages → Mistral OCR (block detection) → crop diagrams +
 
 ## Roadmap
 
-- Publish as a proper PyPI package (`pip install pdf2epub`)
+- Publish as a proper PyPI package (`pip install pdf2epub-v2`)
 - Local web UI for drag-and-drop conversion
 - Support for additional OCR providers beyond Mistral
 
