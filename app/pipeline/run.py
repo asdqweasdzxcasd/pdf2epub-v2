@@ -113,7 +113,7 @@ def _fill_missing_pages(page_layouts, render_result, figures_dir):
     API가 일부 페이지를 못 읽어도 책 내용이 조용히 유실되면 안 된다 —
     V1과 동일하게 페이지 이미지라도 보존한다.
     """
-    from app.pipeline.text_extract import _embed_page_as_figure
+    from app.pipeline.text_extract import embed_page_as_figure
 
     by_num = {pl.page_num: pl for pl in page_layouts}
     filled = []
@@ -122,7 +122,7 @@ def _fill_missing_pages(page_layouts, render_result, figures_dir):
         if layout is not None and layout.blocks:
             filled.append(layout)
             continue
-        block = _embed_page_as_figure(render_result, i, figures_dir)
+        block = embed_page_as_figure(render_result, i, figures_dir)
         if block is not None:
             logger.warning("페이지 %d: OCR 결과 없음 — 페이지 이미지로 대체", i + 1)
             filled.append(PageLayout(page_num=i, blocks=[block]))

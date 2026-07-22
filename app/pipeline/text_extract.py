@@ -39,7 +39,7 @@ def build_layouts_from_text(render_result, figures_dir: Path, progress) -> list[
             else ""
         )
         if len(page_text.strip()) < _PAGE_IMAGE_THRESHOLD:
-            page_block = _embed_page_as_figure(render_result, i, figures_dir)
+            page_block = embed_page_as_figure(render_result, i, figures_dir)
             if page_block is not None:
                 page_layouts.append(PageLayout(page_num=i, blocks=[page_block]))
                 if (i + 1) % 10 == 0 or i == page_count - 1:
@@ -126,7 +126,7 @@ def build_layouts_from_text(render_result, figures_dir: Path, progress) -> list[
     return page_layouts
 
 
-def _embed_page_as_figure(render_result, page_num: int, figures_dir: Path) -> Block | None:
+def embed_page_as_figure(render_result, page_num: int, figures_dir: Path) -> Block | None:
     """이미지 페이지: render()가 미리 만든 페이지 PNG를 figures_dir로 복사하고
     figure Block으로 반환한다. 페이지 PNG 자체가 없으면 None.
     """
@@ -156,3 +156,6 @@ def _embed_page_as_figure(render_result, page_num: int, figures_dir: Path) -> Bl
         confidence=1.0,
         image_path=filename,
     )
+
+
+_embed_page_as_figure = embed_page_as_figure  # 하위호환

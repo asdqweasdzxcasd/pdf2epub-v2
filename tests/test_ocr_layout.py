@@ -116,3 +116,17 @@ def test_잘못된_bbox는_건너뛴다(tmp_path):
     }]
     layouts = build_layouts_from_ocr(pages, page_images=[page_png], figures_dir=tmp_path / "f")
     assert layouts[0].blocks == []  # 역전된 bbox → 스킵
+
+
+def test_equation_블록도_크롭된다(tmp_path):
+    page_png = _make_page_png(tmp_path)
+    figures = tmp_path / "figures"
+    pages = [{
+        "index": 0, "dimensions": {}, "markdown": "",
+        "blocks": [{"type": "equation", "top_left_x": 0.0, "top_left_y": 0.0,
+                    "bottom_right_x": 0.5, "bottom_right_y": 0.5, "content": ""}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[page_png], figures_dir=figures)
+    blk = layouts[0].blocks[0]
+    assert blk.block_type is BlockType.FORMULA
+    assert blk.image_path and (figures / blk.image_path).exists()

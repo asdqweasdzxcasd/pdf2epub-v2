@@ -99,6 +99,10 @@ def _extract_from_bookmarks(pdf_path: Path) -> list[TocEntry]:
 def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     """레이아웃 분석 결과에서 heading 블록을 목차로 변환한다.
 
+    Mistral OCR은 소제목도 title로 분류하므로 페이지당 첫 heading만
+    챕터 경계로 삼는다 — 그렇지 않으면 한 페이지 안의 소제목들까지
+    전부 TOC 항목이 되어 목차가 과도하게 파편화된다.
+
     duck typing 사용:
     - page_layouts: list[PageLayout]
       - PageLayout.page_num: int
@@ -121,5 +125,6 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
                         level=1,
                     )
                 )
+                break  # 페이지당 첫 heading만 채택, 나머지는 건너뜀
 
     return entries

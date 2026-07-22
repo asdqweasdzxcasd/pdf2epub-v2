@@ -55,8 +55,9 @@ class MistralOcrClient:
                 finally:
                     sub.close()
 
-                size_mb = len(pdf_bytes) / 1_048_576
-                logger.info("청크 %d/%d: %d~%d페이지, %.1fMB", ci + 1, len(chunks), start + 1, end, size_mb)
+                size_mb = len(pdf_bytes) * 4 / 3 / 1_048_576  # base64 팽창(×4/3) 반영
+                logger.info("청크 %d/%d: %d~%d페이지, 인코딩 후 %.1fMB",
+                            ci + 1, len(chunks), start + 1, end, size_mb)
                 if size_mb > 45:
                     raise OcrApiError(
                         f"청크 크기 {size_mb:.0f}MB가 API 한도에 근접 — "
