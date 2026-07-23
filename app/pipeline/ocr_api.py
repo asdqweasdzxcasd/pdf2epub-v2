@@ -12,6 +12,9 @@ from pathlib import Path
 
 import fitz
 import requests
+from PIL import Image
+
+from app.pipeline.pdf_render import RENDER_DPI
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,46 @@ class MistralOcrClient:
             return all_pages
         finally:
             doc.close()
+
+    def process_images(self, image_paths: list[Path]) -> list[str]:
+        """이미지들을 각 1페이지로 하는 PDF 1개로 묶어 OCR API를 1회 호출한다.
+
+        작은 크롭 조각(캡션·각주 2-pass 보정)을 낱개로 호출하면 무료 티어
+        rate limit(분당 2요청)에 금방 부딪힌다 — 여러 조각을 PDF 한 장에
+        모아 _call을 한 번만 태워 해결한다.
+
+        픽셀 -> 포인트 환산은 run.py의 트림 PDF 조립과 동일하게 72/RENDER_DPI를
+        쓴다(좌표계 규약은 무관 — 여기서는 페이지 크기만 결정하면 되므로).
+
+        Returns:
+            image_paths와 같은 길이의 markdown 텍스트 리스트, 인덱스 순.
+            응답에 없는 인덱스는 빈 문자열로 채운다.
+        """
+        if not image_paths:
+            return []
+
+        doc = fitz.open()
+        try:
+            for img_path in image_paths:
+                with Image.open(img_path) as img:
+                    w, h = img.size
+                pt_w = w * 72 / RENDER_DPI
+                pt_h = h * 72 / RENDER_DPI
+                page = doc.new_page(width=pt_w, height=pt_h)
+                page.insert_image(fitz.Rect(0, 0, pt_w, pt_h), filename=str(img_path))
+            pdf_bytes = doc.tobytes()
+        finally:
+            doc.close()
+
+        result = self._call(pdf_bytes)
+        by_index = {
+            page.get("index", i): page
+            for i, page in enumerate(result.get("pages", []))
+        }
+        return [
+            (by_index[i].get("markdown") or "") if i in by_index else ""
+            for i in range(len(image_paths))
+        ]
 
     def _call(self, pdf_bytes: bytes) -> dict:
         b64 = base64.b64encode(pdf_bytes).decode()

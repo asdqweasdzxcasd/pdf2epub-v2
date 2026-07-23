@@ -21,6 +21,7 @@ from app.pipeline.ocr_api import MistralOcrClient
 from app.pipeline.ocr_layout import build_layouts_from_ocr
 from app.pipeline.pdf_render import RENDER_DPI, render
 from app.pipeline.progress import ProgressCallback
+from app.pipeline.refine import refine_small_text
 from app.pipeline.text_extract import build_layouts_from_text
 from app.pipeline.toc import extract_toc
 
@@ -45,6 +46,7 @@ def run_pipeline(
     progress: ProgressCallback,
     ocr_mode: str = "auto",
     trim: bool = True,
+    refine: bool = True,
 ) -> PipelineResult:
     """PDF를 EPUB으로 변환한다.
 
@@ -59,6 +61,12 @@ def run_pipeline(
         전에 여백을 제거하면 콘텐츠 글자가 상대적으로 커져 인식률이 좋아진다.
         좌표계 일치를 위해 build_layouts_from_ocr에도 같은 트림된 이미지
         경로를 넘긴다(Mistral이 본 이미지 = bbox 기준 = 크롭 소스).
+
+    refine:
+        OCR API 경로에서만 의미가 있다. True(기본)면 캡션/각주 블록을
+        개별 크롭해 재-OCR하는 2-pass 보정을 수행한다(작은 글씨가
+        Mistral의 내부 정규화로 뭉개지는 문제 대응). 조각들은 PDF 1개로
+        묶어 1회 호출로 처리한다(무료 티어 rate limit 대응).
     """
 
     logger.info("PDF 렌더링 시작: %s", pdf_path)
@@ -94,6 +102,11 @@ def run_pipeline(
             figures_dir=figures_dir,
             progress=progress,
         )
+        if refine:
+            n = refine_small_text(
+                page_layouts, ocr_page_images, client, temp_dir, pages=pages
+            )
+            progress.update(82, "refine", f"작은 글씨 보정 {n}건")
         # fallback은 항상 render_result(원본)를 쓴다 — 전체 페이지 임베드는
         # 좌표 정합이 필요 없어 트림 여부와 무관하게 허용된다
         page_layouts = _fill_missing_pages(page_layouts, render_result, figures_dir)

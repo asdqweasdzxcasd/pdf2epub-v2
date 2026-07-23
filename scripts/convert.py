@@ -40,6 +40,10 @@ def main():
         "--no-trim", dest="trim", action="store_false",
         help="OCR API 경로에서 페이지 여백 자동 트림을 끄고 원본 페이지를 그대로 전송",
     )
+    parser.add_argument(
+        "--no-refine", dest="refine", action="store_false",
+        help="OCR API 경로에서 캡션/각주 2-pass 재-OCR 보정을 끔",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="상세 로그 출력")
     args = parser.parse_args()
 
@@ -78,7 +82,7 @@ def main():
     try:
         run_pipeline(
             args.input, output_path, temp_dir, device, title, progress,
-            ocr_mode=args.ocr, trim=args.trim,
+            ocr_mode=args.ocr, trim=args.trim, refine=args.refine,
         )
         print(f"\n변환 완료: {output_path}", file=sys.stderr)
 
