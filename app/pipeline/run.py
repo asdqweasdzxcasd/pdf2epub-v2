@@ -18,7 +18,7 @@ from app.pipeline.imgproc import trim_uniform_margins
 from app.pipeline.layout import PageLayout
 from app.pipeline.ocr_api import MistralOcrClient
 from app.pipeline.ocr_layout import build_layouts_from_ocr
-from app.pipeline.pdf_render import render
+from app.pipeline.pdf_render import RENDER_DPI, render
 from app.pipeline.progress import ProgressCallback
 from app.pipeline.text_extract import build_layouts_from_text
 from app.pipeline.toc import extract_toc
@@ -139,21 +139,32 @@ def _prepare_trimmed_input(page_images: list[Path], temp_dir: Path) -> tuple[Pat
     trimmed_dir.mkdir(parents=True, exist_ok=True)
 
     trimmed_paths: list[Path] = []
+    trimmed_sizes: list[tuple[int, int]] = []
     for i, src in enumerate(page_images):
         with Image.open(src) as img:
             trimmed = trim_uniform_margins(img)
             dst = trimmed_dir / f"page_{i:04d}.png"
             trimmed.save(dst)
             trimmed_paths.append(dst)
+            trimmed_sizes.append(trimmed.size)
 
     trimmed_pdf_path = temp_dir / "trimmed.pdf"
     doc = fitz.open()
     try:
-        for path in trimmed_paths:
-            with Image.open(path) as img:
-                w, h = img.size
-            page = doc.new_page(width=w, height=h)
-            page.insert_image(fitz.Rect(0, 0, w, h), filename=str(path))
+        for path, (w, h) in zip(trimmed_paths, trimmed_sizes):
+            # Convert pixel dimensions (from 300 DPI render) to PDF points
+            pt_w = w * 72 / RENDER_DPI
+            pt_h = h * 72 / RENDER_DPI
+
+            # Guard against page size limits (PyMuPDF spec: 14400pt)
+            if pt_h > 14000 or pt_w > 14000:
+                logger.warning(
+                    "Page size exceeds 14000pt after conversion: %.1fpt x %.1fpt",
+                    pt_w, pt_h
+                )
+
+            page = doc.new_page(width=pt_w, height=pt_h)
+            page.insert_image(fitz.Rect(0, 0, pt_w, pt_h), filename=str(path))
         doc.save(str(trimmed_pdf_path))
     finally:
         doc.close()

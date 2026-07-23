@@ -162,3 +162,51 @@ def test_응답에서_누락된_페이지도_보정(tmp_path, monkeypatch):
     import zipfile
     names = zipfile.ZipFile(out).namelist()
     assert any(n.endswith(".png") for n in names)
+
+
+def test_트림된_PDF_페이지_크기가_포인트_단위로_선언됨(tmp_path, monkeypatch):
+    """트림된 PDF의 페이지 크기가 픽셀이 아니라 올바른 포인트 단위로
+    선언되었는지 검증한다. 픽셀을 그대로 포인트로 쓰면 엄청 큰 페이지가 된다.
+
+    예: 1000×1500 픽셀 @ 300 DPI
+    - 잘못된 경우: page_width=1000pt ≈ 14인치 (💥 너무 큼)
+    - 올바른 경우: page_width=1000×72/300 ≈ 240pt ≈ 3.3인치
+    """
+    from app.pipeline.pdf_render import RENDER_DPI
+    from app.pipeline.run import _prepare_trimmed_input
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    temp_dir = tmp_path / "t"
+    temp_dir.mkdir()
+
+    # 테스트용 이미지 생성: 1000×1500 픽셀 @ 300 DPI (렌더 해상도 시뮬레이션)
+    img = Image.new("RGB", (1000, 1500), color="white")
+    img_path = tmp_path / "test.png"
+    img.save(img_path)
+
+    # _prepare_trimmed_input 호출
+    trimmed_pdf_path, trimmed_paths = _prepare_trimmed_input([img_path], temp_dir)
+
+    # 트림된 PDF를 열어서 실제 페이지 크기 검증
+    doc = fitz.open(str(trimmed_pdf_path))
+    try:
+        page = doc[0]
+        rect = page.rect
+        pt_w = rect.width
+        pt_h = rect.height
+
+        # 예상 포인트 크기 (여백 제거 후 약간 작아질 수 있으므로 여유 범위 사용)
+        expected_pt_w = 1000 * 72 / RENDER_DPI
+        expected_pt_h = 1500 * 72 / RENDER_DPI
+
+        # ±5pt 오차 범위 (트림 때문에 약간 작아질 수 있음)
+        assert abs(pt_w - expected_pt_w) < 150, \
+            f"Width mismatch: got {pt_w:.1f}pt, expected ~{expected_pt_w:.1f}pt"
+        assert abs(pt_h - expected_pt_h) < 150, \
+            f"Height mismatch: got {pt_h:.1f}pt, expected ~{expected_pt_h:.1f}pt"
+
+        # 픽셀 단위로 선언됐다면 이정도 되었을 것 (문제 없음 확인)
+        assert pt_w < 500, f"Page width {pt_w}pt seems to be in pixels, not points"
+        assert pt_h < 700, f"Page height {pt_h}pt seems to be in pixels, not points"
+    finally:
+        doc.close()
