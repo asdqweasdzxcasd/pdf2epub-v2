@@ -121,8 +121,9 @@ def _create_default_css() -> epub.EpubItem:
 body { font-family: serif; line-height: 1.8; margin: 1em; }
 h1, h2, h3 { font-family: sans-serif; margin-top: 1.5em; }
 p { text-indent: 1em; margin: 0.5em 0; }
-.figure { text-align: center; margin: 1em 0; }
-.figure img { max-width: 100%; height: auto; }
+figure.figure { text-align: center; margin: 1em 0; }
+figure.figure img { max-width: 100%; height: auto; }
+figcaption { font-size: 0.9em; color: #555; font-style: italic; margin-top: 0.3em; }
 .table-img { text-align: center; margin: 1em 0; }
 .table-img img { max-width: 100%; height: auto; }
 .formula { text-align: center; margin: 0.5em 0; }
@@ -241,8 +242,12 @@ def _build_chapter_html(
     - heading → <h1>
     - paragraph → <p> (줄바꿈 단위로 분리)
     - list_item → <p> 앞에 불릿 추가
-    - figure/table/formula → 이미지가 있으면 <img>, 없으면 alt 텍스트
-    - caption → <p class="caption">
+    - figure(이미지 있음) + 인접 caption → <figure><img/><figcaption> 병합
+      (같은 PageLayout 안에서 FIGURE 바로 다음이 CAPTION이거나, CAPTION 바로
+      다음이 FIGURE인 경우만 병합. 페이지 경계를 넘는 병합은 하지 않음)
+    - 짝 없는 figure → <figure class="figure"><img/></figure>
+    - 짝 없는 caption → <p class="caption">
+    - table/formula → 이미지가 있으면 <img>, 없으면 alt 텍스트
     - footnote → <div class="footnote">
     - page_header, page_footer → EPUB에서 제외
     """
@@ -259,12 +264,12 @@ def _build_chapter_html(
     ]
 
     for layout in chapter_layouts:
-        for block in layout.blocks:
-            bt = (
-                block.block_type.value
-                if hasattr(block.block_type, "value")
-                else str(block.block_type)
-            )
+        blocks = layout.blocks
+        n = len(blocks)
+        i = 0
+        while i < n:
+            block = blocks[i]
+            bt = _block_type_str(block)
 
             if bt == "heading":
                 text = block.text.strip() if block.text else ""
@@ -288,12 +293,15 @@ def _build_chapter_html(
                     )
 
             elif bt == "figure" and block.image_path:
-                img_src = f"images/{block.image_path}"
-                parts.append(
-                    f'<div class="figure">'
-                    f'<img src="{img_src}" alt="그림"/>'
-                    f"</div>"
-                )
+                next_block = blocks[i + 1] if i + 1 < n else None
+                if next_block is not None and _block_type_str(next_block) == "caption":
+                    caption_text = (
+                        next_block.text.strip() if next_block.text else ""
+                    )
+                    parts.append(_figure_html(block.image_path, caption_text))
+                    i += 2
+                    continue
+                parts.append(_figure_html(block.image_path))
 
             elif bt == "table":
                 if block.image_path:
@@ -315,6 +323,16 @@ def _build_chapter_html(
                 )
 
             elif bt == "caption":
+                next_block = blocks[i + 1] if i + 1 < n else None
+                if (
+                    next_block is not None
+                    and _block_type_str(next_block) == "figure"
+                    and next_block.image_path
+                ):
+                    caption_text = block.text.strip() if block.text else ""
+                    parts.append(_figure_html(next_block.image_path, caption_text))
+                    i += 2
+                    continue
                 text = block.text.strip() if block.text else ""
                 if text:
                     parts.append(
@@ -332,10 +350,34 @@ def _build_chapter_html(
 
             # page_header, page_footer는 EPUB에서 제외 (무시)
 
+            i += 1
+
     parts.append("</body>")
     parts.append("</html>")
 
     return "\n".join(parts)
+
+
+def _block_type_str(block) -> str:
+    """Block.block_type을 문자열로 정규화한다 (Enum이든 str이든)."""
+    return (
+        block.block_type.value
+        if hasattr(block.block_type, "value")
+        else str(block.block_type)
+    )
+
+
+def _figure_html(image_path: str, caption_text: str = "") -> str:
+    """<figure> 마크업을 생성한다. caption_text가 있으면 <figcaption>을 함께 담는다."""
+    img_src = f"images/{image_path}"
+    img_tag = f'<img src="{img_src}" alt="그림"/>'
+    if caption_text:
+        return (
+            f'<figure class="figure">{img_tag}'
+            f"<figcaption>{_escape_html(caption_text)}</figcaption>"
+            f"</figure>"
+        )
+    return f'<figure class="figure">{img_tag}</figure>'
 
 
 def markdown_table_to_html(md: str) -> str:
