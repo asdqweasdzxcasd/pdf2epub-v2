@@ -170,3 +170,28 @@ def test_페이지_이미지_없으면_스킵(tmp_path):
 
     assert n == 0
     assert client.calls == []
+
+
+def test_응답에서_부분_누락_페이지는_빈_문자열로_보정(tmp_path):
+    """Finding 2: process_images로 3개 이미지를 보내는데 응답에 index 0과 2만
+    있고 1이 없으면, 반환값이 [텍스트0, "", 텍스트2]가 되어야 한다.
+    _call을 모킹해서 부분 응답 시뮬레이션.
+    """
+    img_paths = [_make_page_png(tmp_path, name=f"c{i}.png") for i in range(3)]
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "pages": [
+            {"index": 0, "markdown": "텍스트0"},
+            {"index": 2, "markdown": "텍스트2"},
+            # index 1 누락 — API가 인식 실패했을 가능성
+        ]
+    }
+
+    client = MistralOcrClient(api_key="k")
+    with patch("app.pipeline.ocr_api.requests.post", return_value=resp):
+        texts = client.process_images(img_paths)
+
+    assert len(texts) == 3
+    assert texts == ["텍스트0", "", "텍스트2"]

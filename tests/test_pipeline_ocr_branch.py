@@ -254,3 +254,31 @@ def test_트림된_PDF에는_JPEG로_임베드되어_업로드_크기가_줄어�
         assert (pix.width, pix.height) == png_pixel_size
     finally:
         doc.close()
+
+
+def test_refine_실패가_전체_변환을_죽이지_않는다(tmp_path, monkeypatch):
+    """Finding 1: refine_small_text가 OcrApiError를 던져도 변환이 계속되고
+    EPUB이 생성된다. 보정은 부가 기능이므로 실패해도 무시한다.
+    """
+    from app.pipeline.ocr_api import OcrApiError
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    pdf = _make_image_pdf(tmp_path)
+    out = tmp_path / "out.epub"
+
+    def side_effect(*args, **kwargs):
+        raise OcrApiError("mock refine 실패")
+
+    with patch("app.pipeline.run.MistralOcrClient") as MockClient:
+        MockClient.return_value.process_pdf.return_value = _fake_pages(1)
+        # refine_small_text를 patch해서 OcrApiError 발생
+        with patch("app.pipeline.run.refine_small_text", side_effect=side_effect):
+            # 예외가 전파되지 않고 EPUB이 생성되어야 한다
+            result = run_pipeline(
+                pdf, out, tmp_path / "t", "cpu", "테스트", _NullProgress(),
+                ocr_mode="api",
+                refine=True,
+            )
+
+    assert out.exists(), "refine 실패해도 EPUB이 생성되어야 한다"
+    assert result.page_count == 1

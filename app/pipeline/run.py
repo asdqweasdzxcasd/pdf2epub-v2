@@ -17,7 +17,7 @@ from app.config import settings
 from app.pipeline.epub_build import build_epub
 from app.pipeline.imgproc import trim_uniform_margins
 from app.pipeline.layout import PageLayout
-from app.pipeline.ocr_api import MistralOcrClient
+from app.pipeline.ocr_api import MistralOcrClient, OcrApiError
 from app.pipeline.ocr_layout import build_layouts_from_ocr
 from app.pipeline.pdf_render import RENDER_DPI, render
 from app.pipeline.progress import ProgressCallback
@@ -102,11 +102,17 @@ def run_pipeline(
             figures_dir=figures_dir,
             progress=progress,
         )
+        # refine은 _fill_missing_pages 전에 실행 — fallback은 CAPTION이
+        # 없어 refine 대상이 아님 (순서 바꾸면 좌표계 가정이 깨짐)
         if refine:
-            n = refine_small_text(
-                page_layouts, ocr_page_images, client, temp_dir, pages=pages
-            )
-            progress.update(82, "refine", f"작은 글씨 보정 {n}건")
+            try:
+                n = refine_small_text(
+                    page_layouts, ocr_page_images, client, temp_dir, pages=pages
+                )
+                progress.update(82, "refine", f"작은 글씨 보정 {n}건")
+            except OcrApiError:
+                # 보정은 부가 기능 — 실패해도 1차 결과로 변환을 계속한다
+                logger.warning("작은 글씨 보정 실패 — 1차 OCR 결과 유지", exc_info=True)
         # fallback은 항상 render_result(원본)를 쓴다 — 전체 페이지 임베드는
         # 좌표 정합이 필요 없어 트림 여부와 무관하게 허용된다
         page_layouts = _fill_missing_pages(page_layouts, render_result, figures_dir)
