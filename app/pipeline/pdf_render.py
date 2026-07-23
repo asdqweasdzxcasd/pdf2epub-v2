@@ -1,8 +1,9 @@
 """PyMuPDF 기반 PDF 페이지 렌더링 및 텍스트 추출"""
 
-import fitz  # PyMuPDF
 from dataclasses import dataclass
 from pathlib import Path
+
+import fitz  # PyMuPDF
 
 
 @dataclass

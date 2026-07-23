@@ -27,7 +27,6 @@ from pathlib import Path
 
 import cv2
 import fitz  # PyMuPDF
-import numpy as np
 import requests
 
 OCR_ENDPOINT = "https://api.mistral.ai/v1/ocr"

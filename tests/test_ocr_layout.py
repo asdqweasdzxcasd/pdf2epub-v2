@@ -46,7 +46,7 @@ def test_build_layouts_실측_픽스처(tmp_path):
     assert len(layouts) == 2
     assert layouts[0].page_num == pages[0]["index"]
     # 텍스트 블록에 content가 옮겨졌는지
-    all_blocks = [b for l in layouts for b in l.blocks]
+    all_blocks = [b for layout in layouts for b in layout.blocks]
     text_blocks = [b for b in all_blocks
                    if b.block_type in (BlockType.PARAGRAPH, BlockType.HEADING)]
     assert text_blocks, "텍스트 블록이 하나도 없음"

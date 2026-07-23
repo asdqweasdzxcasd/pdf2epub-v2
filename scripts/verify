@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 전체 검증 한 방 명령 — exit 0 = 완료 판정 가능
+# autodev 루프(Stop hook)와 사람 모두 이 스크립트 하나로 판정한다.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+PY=.venv/bin/python
+if [ ! -x "$PY" ]; then
+  echo "[verify] .venv 없음 — uv venv && uv pip install -r requirements.txt -r requirements-dev.txt ruff"
+  exit 1
+fi
+
+echo "[verify] ruff lint..."
+"$PY" -m ruff check app scripts tests
+
+echo "[verify] pytest..."
+"$PY" -m pytest -q
+
+echo "[verify] OK"

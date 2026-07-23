@@ -44,8 +44,8 @@ class SuryaOcrEngine:
         )
 
         from surya.detection import DetectionPredictor
-        from surya.recognition import RecognitionPredictor
         from surya.foundation import FoundationPredictor
+        from surya.recognition import RecognitionPredictor
 
         logger.info("Surya OCR 모델 로딩 중...")
         self._det_predictor = DetectionPredictor()

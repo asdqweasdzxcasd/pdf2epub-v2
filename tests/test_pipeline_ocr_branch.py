@@ -4,7 +4,6 @@ from unittest.mock import patch
 
 import fitz
 
-from app.pipeline.progress import ProgressCallback
 from app.pipeline.run import run_pipeline
 
 

@@ -86,8 +86,8 @@ class SuryaLayoutEngine:
     def __init__(self, device: str = "cpu"):
         os.environ.setdefault("TORCH_DEVICE", device)
 
-        from surya.layout import LayoutPredictor
         from surya.foundation import FoundationPredictor
+        from surya.layout import LayoutPredictor
 
         logger.info("Surya Layout 모델 로딩 중...")
         foundation = FoundationPredictor()
