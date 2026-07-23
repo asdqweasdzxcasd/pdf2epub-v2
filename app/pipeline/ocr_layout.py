@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from app.pipeline.imgproc import trim_uniform_margins
 from app.pipeline.layout import Block, BlockType, PageLayout
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,7 @@ def _crop_block(
             x0, y0 = max(0, x0), max(0, y0)
             x1, y1 = min(w, x1), min(h, y1)
             crop = img.crop((x0, y0, x1, y1))
+            crop = trim_uniform_margins(crop, pad=2)  # 페이지 장식 테두리 제거
             filename = f"page_{page_num:04d}_blk_{blk_idx:03d}.png"
             crop.save(figures_dir / filename)
             return filename

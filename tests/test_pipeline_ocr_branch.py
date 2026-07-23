@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+from PIL import Image
 
 from app.pipeline.run import run_pipeline
 
@@ -103,6 +104,51 @@ def test_빈_블록_페이지는_페이지_이미지로_보정(tmp_path, monkeyp
     import zipfile
     names = zipfile.ZipFile(out).namelist()
     assert any(n.endswith(".png") for n in names), "빈 페이지가 이미지로 보정되지 않음"
+
+
+def test_trim_기본값이면_트림된_PDF가_클라이언트에_전달(tmp_path, monkeypatch):
+    """trim=True(기본)이면 원본이 아니라 여백을 트림한 이미지-only PDF가
+    OCR API로 전달돼야 한다 — 좌표계 일치(Mistral이 본 이미지 = bbox 기준 =
+    크롭 소스)가 핵심 계약이다.
+    """
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    pdf = _make_image_pdf(tmp_path)
+    out = tmp_path / "out.epub"
+    temp_dir = tmp_path / "t"
+    with patch("app.pipeline.run.MistralOcrClient") as MockClient:
+        MockClient.return_value.process_pdf.return_value = _fake_pages(1)
+        run_pipeline(
+            pdf, out, temp_dir, "cpu", "테스트", _NullProgress(),
+            ocr_mode="api",
+        )
+
+    called_path = Path(MockClient.return_value.process_pdf.call_args.args[0])
+    assert called_path != pdf
+    assert called_path.name == "trimmed.pdf"
+    assert called_path.exists()
+
+    # 트림된 PDF의 페이지 이미지가 원본 렌더 이미지보다 작아야 한다(여백 제거)
+    orig_size = Image.open(temp_dir / "pages" / "0000.png").size
+    trimmed_size = Image.open(temp_dir / "trimmed" / "page_0000.png").size
+    assert trimmed_size[0] < orig_size[0]
+    assert trimmed_size[1] < orig_size[1]
+
+
+def test_no_trim이면_원본_PDF가_그대로_전달(tmp_path, monkeypatch):
+    """--no-trim 상당(trim=False)이면 트림 없이 원본 pdf_path가 그대로 전달된다."""
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    pdf = _make_image_pdf(tmp_path)
+    out = tmp_path / "out.epub"
+    with patch("app.pipeline.run.MistralOcrClient") as MockClient:
+        MockClient.return_value.process_pdf.return_value = _fake_pages(1)
+        run_pipeline(
+            pdf, out, tmp_path / "t", "cpu", "테스트", _NullProgress(),
+            ocr_mode="api", trim=False,
+        )
+
+    called_path = Path(MockClient.return_value.process_pdf.call_args.args[0])
+    assert called_path == pdf
+    assert not (tmp_path / "t" / "trimmed.pdf").exists()
 
 
 def test_응답에서_누락된_페이지도_보정(tmp_path, monkeypatch):

@@ -36,6 +36,10 @@ def main():
         "--ocr", choices=["auto", "api", "off"], default="auto",
         help="이미지 PDF 처리: auto=키 있으면 API, api=강제, off=페이지 이미지 임베드",
     )
+    parser.add_argument(
+        "--no-trim", dest="trim", action="store_false",
+        help="OCR API 경로에서 페이지 여백 자동 트림을 끄고 원본 페이지를 그대로 전송",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="상세 로그 출력")
     args = parser.parse_args()
 
@@ -74,7 +78,7 @@ def main():
     try:
         run_pipeline(
             args.input, output_path, temp_dir, device, title, progress,
-            ocr_mode=args.ocr,
+            ocr_mode=args.ocr, trim=args.trim,
         )
         print(f"\n변환 완료: {output_path}", file=sys.stderr)
 

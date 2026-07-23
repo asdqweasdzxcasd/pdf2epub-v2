@@ -9,8 +9,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import fitz  # PyMuPDF
+from PIL import Image
+
 from app.config import settings
 from app.pipeline.epub_build import build_epub
+from app.pipeline.imgproc import trim_uniform_margins
 from app.pipeline.layout import PageLayout
 from app.pipeline.ocr_api import MistralOcrClient
 from app.pipeline.ocr_layout import build_layouts_from_ocr
@@ -37,6 +41,7 @@ def run_pipeline(
     title: str,
     progress: ProgressCallback,
     ocr_mode: str = "auto",
+    trim: bool = True,
 ) -> PipelineResult:
     """PDF를 EPUB으로 변환한다.
 
@@ -44,6 +49,13 @@ def run_pipeline(
         auto — 이미지 PDF이고 MISTRAL_API_KEY가 있으면 OCR API 사용
         api  — 강제로 OCR API 사용 (키 없으면 에러)
         off  — V1 동작 (이미지 페이지는 PNG 임베드)
+
+    trim:
+        OCR API 경로(use_api)에서만 의미가 있다. True(기본)면 페이지 이미지의
+        균일 여백을 먼저 잘라내 OCR에 보낸다 — Mistral 내부 정규화(~1020px)
+        전에 여백을 제거하면 콘텐츠 글자가 상대적으로 커져 인식률이 좋아진다.
+        좌표계 일치를 위해 build_layouts_from_ocr에도 같은 트림된 이미지
+        경로를 넘긴다(Mistral이 본 이미지 = bbox 기준 = 크롭 소스).
     """
 
     logger.info("PDF 렌더링 시작: %s", pdf_path)
@@ -64,15 +76,23 @@ def run_pipeline(
     )
 
     if use_api:
-        logger.info("OCR API 경로 사용 (mode=%s)", ocr_mode)
+        logger.info("OCR API 경로 사용 (mode=%s, trim=%s)", ocr_mode, trim)
         client = MistralOcrClient(api_key=api_key, model=settings.OCR_MODEL)
-        pages = client.process_pdf(pdf_path, progress=progress)
+        if trim:
+            ocr_pdf_path, ocr_page_images = _prepare_trimmed_input(
+                render_result.page_images, temp_dir
+            )
+        else:
+            ocr_pdf_path, ocr_page_images = pdf_path, render_result.page_images
+        pages = client.process_pdf(ocr_pdf_path, progress=progress)
         page_layouts = build_layouts_from_ocr(
             pages,
-            page_images=render_result.page_images,
+            page_images=ocr_page_images,
             figures_dir=figures_dir,
             progress=progress,
         )
+        # fallback은 항상 render_result(원본)를 쓴다 — 전체 페이지 임베드는
+        # 좌표 정합이 필요 없어 트림 여부와 무관하게 허용된다
         page_layouts = _fill_missing_pages(page_layouts, render_result, figures_dir)
     else:
         if render_result.ocr_needed:
@@ -105,6 +125,40 @@ def run_pipeline(
         ocr_needed=render_result.ocr_needed,
         toc_count=len(toc_entries),
     )
+
+
+def _prepare_trimmed_input(page_images: list[Path], temp_dir: Path) -> tuple[Path, list[Path]]:
+    """페이지 이미지들의 여백을 트림하고, 그 이미지들로 이미지-only PDF를 조립한다.
+
+    반환된 PDF 경로는 client.process_pdf에, 이미지 경로 리스트는
+    build_layouts_from_ocr(page_images=...)에 그대로 전달해야 한다 —
+    Mistral이 실제로 본 이미지와 블록 bbox 기준, 크롭 소스가 모두
+    같은 좌표계를 공유해야 하기 때문이다.
+    """
+    trimmed_dir = temp_dir / "trimmed"
+    trimmed_dir.mkdir(parents=True, exist_ok=True)
+
+    trimmed_paths: list[Path] = []
+    for i, src in enumerate(page_images):
+        with Image.open(src) as img:
+            trimmed = trim_uniform_margins(img)
+            dst = trimmed_dir / f"page_{i:04d}.png"
+            trimmed.save(dst)
+            trimmed_paths.append(dst)
+
+    trimmed_pdf_path = temp_dir / "trimmed.pdf"
+    doc = fitz.open()
+    try:
+        for path in trimmed_paths:
+            with Image.open(path) as img:
+                w, h = img.size
+            page = doc.new_page(width=w, height=h)
+            page.insert_image(fitz.Rect(0, 0, w, h), filename=str(path))
+        doc.save(str(trimmed_pdf_path))
+    finally:
+        doc.close()
+
+    return trimmed_pdf_path, trimmed_paths
 
 
 def _fill_missing_pages(page_layouts, render_result, figures_dir):
