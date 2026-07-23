@@ -72,9 +72,34 @@ def _make_page_png(tmp_path, w=200, h=400, color=(255, 0, 0)):
     return p
 
 
+def _make_page_png_with_box(tmp_path, w=200, h=400, box=(50, 50, 149, 249), color=(128, 128, 128)):
+    """흰 배경 페이지에 지정 box(inclusive) 영역만 색을 칠한 PNG를 만든다.
+
+    color는 채도 0(회색조)으로 둬야 strip_chromatic_frame의 채도 밴드
+    탐지에 걸리지 않는다 — 순수 크롭/패딩/트림 동작만 검증하기 위함.
+    """
+    from PIL import Image, ImageDraw
+    p = tmp_path / "page_000.png"
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle(box, fill=color)
+    img.save(p)
+    return p
+
+
 def test_image_블록_크롭(tmp_path):
+    """Task 4: _crop_block이 bbox를 pad_out(6px)만큼 바깥으로 확장한 뒤
+    strip_chromatic_frame(trim_uniform_margins 대신)으로 후처리하므로,
+    bbox가 콘텐츠에 정확히 맞아떨어져도 결과에는 pad_out으로 확보된 실제
+    배경 픽셀에서 온 pad=2 여백이 남는다(이전엔 bbox가 이미 타이트해
+    트림이 더할 여백이 없어 원본 그대로 (100,200)이었음 — 이 갱신은
+    pad_out 도입에 따른 의도된 변화).
+
+    구 fg=(255,0,0)(고채도)은 strip_chromatic_frame이 콘텐츠 자체를
+    "채도 프레임"으로 오인해 깎아낼 위험이 있어(단일 색으로 꽉 찬 크롭은
+    전체가 채도 임계치를 넘음) 회색(채도 0)으로 바꿨다.
+    """
     from PIL import Image
-    page_png = _make_page_png(tmp_path)
+    page_png = _make_page_png_with_box(tmp_path, box=(50, 50, 149, 249))
     figures = tmp_path / "figures"
     pages = [{
         "index": 0,
@@ -82,8 +107,8 @@ def test_image_블록_크롭(tmp_path):
         "markdown": "",
         "blocks": [{
             "type": "image",
-            "top_left_x": 0.0, "top_left_y": 0.0,
-            "bottom_right_x": 0.5, "bottom_right_y": 0.5,
+            "top_left_x": 0.25, "top_left_y": 0.125,
+            "bottom_right_x": 0.75, "bottom_right_y": 0.625,
             "content": "",
         }],
     }]
@@ -93,8 +118,46 @@ def test_image_블록_크롭(tmp_path):
     assert blk.block_type is BlockType.FIGURE
     assert blk.image_path == "page_0000_blk_000.png"
     crop = Image.open(figures / blk.image_path)
-    assert crop.size == (100, 200)  # 원본 200x400의 좌상단 절반
-    assert crop.getpixel((10, 10)) == (255, 0, 0)
+    # 콘텐츠(100x200) + pad_out(6)로 확보된 실배경에서 pad=2씩 -> +4
+    assert crop.size == (104, 204)
+    cx, cy = crop.size[0] // 2, crop.size[1] // 2
+    assert crop.getpixel((cx, cy)) == (128, 128, 128)  # 중심은 콘텐츠
+    assert crop.getpixel((0, 0)) == (255, 255, 255)  # 모서리는 pad 배경
+
+
+def test_bbox_바깥_pad_out으로_잘린_콘텐츠가_복원된다(tmp_path):
+    """Mistral bbox가 다이어그램보다 4px씩 타이트해도(< pad_out=6),
+    _crop_block이 bbox를 6px 바깥으로 확장해 크롭하므로 다이어그램
+    가장자리가 잘리지 않고 최종 결과에 포함돼야 한다.
+    """
+    from PIL import Image
+    # 다이어그램 실제 영역: (40,40)-(159,259) inclusive, 120x220
+    page_png = _make_page_png_with_box(
+        tmp_path, w=200, h=400, box=(40, 40, 159, 259), color=(128, 128, 128)
+    )
+    figures = tmp_path / "figures"
+    # bbox는 다이어그램보다 4px씩 타이트 (44,44)-(156,256) — 픽셀 좌표 그대로 사용
+    pages = [{
+        "index": 0,
+        "dimensions": {"width": 200, "height": 400},
+        "markdown": "",
+        "blocks": [{
+            "type": "image",
+            "top_left_x": 44, "top_left_y": 44,
+            "bottom_right_x": 156, "bottom_right_y": 256,
+            "content": "",
+        }],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[page_png], figures_dir=figures)
+
+    blk = layouts[0].blocks[0]
+    crop = Image.open(figures / blk.image_path)
+    # 다이어그램(120x220) + pad_out(6)-inset(4)=2px 실배경 여백 * 2변 = 124x224
+    assert crop.size == (124, 224)
+    # 다이어그램 우하단 모서리(구 타이트 bbox로는 잘렸을 픽셀)가 보존됐는지
+    assert crop.getpixel((121, 221)) == (128, 128, 128)
+    # 크롭 모서리는 배경(잘리지 않고 여백이 남아있음을 확인)
+    assert crop.getpixel((0, 0)) == (255, 255, 255)
 
 
 def test_페이지_PNG_없으면_크롭_블록은_건너뛴다(tmp_path):

@@ -1,8 +1,8 @@
-"""imgproc.trim_uniform_margins 단위 테스트"""
+"""imgproc.trim_uniform_margins / strip_chromatic_frame 단위 테스트"""
 import numpy as np
 from PIL import Image, ImageDraw
 
-from app.pipeline.imgproc import trim_uniform_margins
+from app.pipeline.imgproc import strip_chromatic_frame, trim_uniform_margins
 
 
 def _make_margin_image(bg=(255, 255, 255), fg=(0, 0, 0), size=200, box=(50, 50, 149, 149)):
@@ -156,3 +156,70 @@ def test_occupancy_파라미터로_민감도_조정_가능():
     # occupancy=0.0이면 예전처럼 단일 픽셀도 콘텐츠로 인식 -> 트림 경계 확장
     trimmed = trim_uniform_margins(img, occupancy=0.0)
     assert trimmed.size != (116, 116)
+
+
+# --- strip_chromatic_frame ---
+
+
+def _make_framed_diagram(
+    size=200,
+    frame_color=(160, 30, 200),
+    frame_width=3,
+    corner_gap=10,
+    diagram_box=(60, 60, 139, 139),
+):
+    """흰 배경 + 가장자리 채도 프레임(둥근 모서리 흉내로 모서리 근처 몇 px 끊김)
+    + 내부 다이어그램(검은 사각형)이 있는 합성 이미지.
+
+    프레임은 이미지 진짜 가장자리(0, size-1)에 그려진다 — 책 장식 테두리가
+    그림 크롭의 bbox 바깥 여백 없이 크롭 경계에 바로 물려 나오는 실측 상황을
+    흉내낸다.
+    """
+    img = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    lo, hi = corner_gap, size - 1 - corner_gap
+    draw.rectangle((lo, 0, hi, frame_width - 1), fill=frame_color)  # top
+    draw.rectangle((lo, size - frame_width, hi, size - 1), fill=frame_color)  # bottom
+    draw.rectangle((0, lo, frame_width - 1, hi), fill=frame_color)  # left
+    draw.rectangle((size - frame_width, lo, size - 1, hi), fill=frame_color)  # right
+    draw.rectangle(diagram_box, fill=(0, 0, 0))
+    return img
+
+
+def _max_chroma(img: Image.Image) -> int:
+    arr = np.asarray(img.convert("RGB"), dtype=np.int16)
+    return int((arr.max(axis=2) - arr.min(axis=2)).max())
+
+
+def _black_pixel_count(img: Image.Image) -> int:
+    arr = np.asarray(img.convert("RGB"), dtype=np.int16)
+    return int(np.all(arr == 0, axis=2).sum())
+
+
+def test_채도_높은_프레임이_제거되고_다이어그램은_완전_보존된다():
+    img = _make_framed_diagram()
+    result = strip_chromatic_frame(img)
+
+    # 보라 프레임(채도 170)이 완전히 사라져야 함 — 잔존 최대 채도는
+    # chroma_min(40) 미만이어야 한다
+    assert _max_chroma(result) < 40
+    # 내부 검은 다이어그램(80x80=6400px)은 한 픽셀도 잘리지 않아야 한다
+    assert _black_pixel_count(result) == 6400
+
+
+def test_검은_프레임은_채도가_낮아_제거되지_않는다():
+    # 채도 0인(R=G=B) 어두운 회색 프레임 — 표 등의 검은 테두리 시뮬레이션
+    img = _make_framed_diagram(frame_color=(20, 20, 20))
+    result = strip_chromatic_frame(img)
+
+    # 프레임 색이 여전히 이미지 안에 남아 있어야 한다(제거되지 않음)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    assert np.any(np.all(arr == (20, 20, 20), axis=2))
+
+
+def test_프레임_없는_이미지는_trim_pad2와_동일하다():
+    img = _make_margin_image()
+    result = strip_chromatic_frame(img)
+    expected = trim_uniform_margins(img, pad=2)
+    assert result.size == expected.size
+    assert result.tobytes() == expected.tobytes()

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.pipeline.imgproc import trim_uniform_margins
+from app.pipeline.imgproc import strip_chromatic_frame
 from app.pipeline.layout import Block, BlockType, PageLayout
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,11 @@ _TYPE_MAP: dict[str, BlockType] = {
 
 # 페이지 PNG에서 크롭해 이미지로 임베드하는 타입 (Task 2에서 구현)
 _CROP_TYPES = frozenset({BlockType.FIGURE, BlockType.FORMULA})
+
+# bbox 바깥으로 확장할 여유(px) — Mistral bbox가 다이어그램 경계선보다
+# 타이트해 콘텐츠가 잘리는 문제 보정. 여분 배경은 strip_chromatic_frame이
+# 다시 트림해 제거한다 (Task 4)
+_PAD_OUT = 6
 
 
 def map_block_type(mistral_type: str) -> BlockType:
@@ -137,10 +142,10 @@ def _crop_block(
             x0, y0, x1, y1 = scale_bbox(raw, w, h, page.get("dimensions") or {})
             if x1 <= x0 or y1 <= y0:
                 return None
-            x0, y0 = max(0, x0), max(0, y0)
-            x1, y1 = min(w, x1), min(h, y1)
+            x0, y0 = max(0, x0 - _PAD_OUT), max(0, y0 - _PAD_OUT)
+            x1, y1 = min(w, x1 + _PAD_OUT), min(h, y1 + _PAD_OUT)
             crop = img.crop((x0, y0, x1, y1))
-            crop = trim_uniform_margins(crop, pad=2)  # 페이지 장식 테두리 제거
+            crop = strip_chromatic_frame(crop)  # 채도 프레임 제거 + 여백 트림
             filename = f"page_{page_num:04d}_blk_{blk_idx:03d}.png"
             crop.save(figures_dir / filename)
             return filename
