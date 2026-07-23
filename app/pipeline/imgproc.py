@@ -17,12 +17,20 @@ def trim_uniform_margins(
     tol: int = 12,
     pad: int = 8,
     min_keep: float = 0.25,
+    occupancy: float = 0.005,
 ) -> Image.Image:
     """이미지 가장자리의 균일한 여백을 제거한다.
 
     바깥 2px 프레임 픽셀들의 채널별 중앙값을 배경색으로 삼고, 배경색과의
-    채널 최대 편차가 tol 이하인 가장자리 행/열을 안쪽으로 제거한다.
-    남은 콘텐츠 둘레에는 pad px 여백을 유지한다.
+    채널 최대 편차가 tol 초과인 픽셀 비율이 occupancy를 넘는 가장자리
+    행/열을 콘텐츠로 판정해 안쪽으로 제거한다. 남은 콘텐츠 둘레에는
+    pad px 여백을 유지한다.
+
+    입력에 알파 채널(RGBA/LA/투명도 있는 P)이 있으면 배경색 판정용 스캔은
+    흰 배경에 합성한 뒤 수행한다 — 투명 영역의 RGB 값은 임의값일 수 있어
+    (예: 완전 투명인데 RGB는 가비지 컬러) 알파를 무시하고 그대로 스캔하면
+    투명 여백이 노이즈투성이 콘텐츠로 오인될 수 있다. 실제 크롭은 항상
+    원본 이미지(알파 포함)에 대해 수행되어 모드/투명도가 보존된다.
 
     안전장치: 트림 결과 면적이 원본의 min_keep 미만이면 원본을 그대로
     반환한다 (전면 사진 페이지 등 여백이 없는 이미지의 과잉 트림 방지).
@@ -32,6 +40,9 @@ def trim_uniform_margins(
         tol: 배경으로 간주할 채널 최대 편차 허용치
         pad: 트림 후 콘텐츠 둘레에 남길 여백(px)
         min_keep: 트림 결과가 유지해야 할 최소 면적 비율(원본 대비, 0~1)
+        occupancy: 행/열을 콘텐츠로 판정할 tol 초과 픽셀 비율 임계치(0~1).
+            이 값 이하 비율의 고립 노이즈(스캔 먼지, JPEG 노이즈 등)는
+            배경으로 간주해 무시한다.
 
     Returns:
         트림된 이미지 (원본 모드 유지). 트림할 여백이 없거나 안전장치가
@@ -41,7 +52,16 @@ def trim_uniform_margins(
     if w <= 2 * _FRAME_WIDTH or h <= 2 * _FRAME_WIDTH:
         return img
 
-    rgb = np.asarray(img.convert("RGB"), dtype=np.int16)
+    scan_src = img
+    has_alpha = img.mode in ("RGBA", "LA") or (
+        img.mode == "P" and "transparency" in img.info
+    )
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        white_bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        scan_src = Image.alpha_composite(white_bg, rgba)
+
+    rgb = np.asarray(scan_src.convert("RGB"), dtype=np.int16)
 
     frame = np.concatenate([
         rgb[:_FRAME_WIDTH, :, :].reshape(-1, 3),
@@ -54,8 +74,10 @@ def trim_uniform_margins(
     diff = np.abs(rgb - bg).max(axis=2)
     is_content = diff > tol
 
-    rows = np.where(is_content.any(axis=1))[0]
-    cols = np.where(is_content.any(axis=0))[0]
+    row_occupancy = is_content.mean(axis=1)
+    col_occupancy = is_content.mean(axis=0)
+    rows = np.where(row_occupancy > occupancy)[0]
+    cols = np.where(col_occupancy > occupancy)[0]
     if rows.size == 0 or cols.size == 0:
         return img  # 배경과 구분되는 콘텐츠 없음 — 트림할 것 없음
 

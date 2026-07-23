@@ -3,7 +3,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageFilter
 
 from app.pipeline.run import run_pipeline
 
@@ -208,5 +209,48 @@ def test_트림된_PDF_페이지_크기가_포인트_단위로_선언됨(tmp_pat
         # 픽셀 단위로 선언됐다면 이정도 되었을 것 (문제 없음 확인)
         assert pt_w < 500, f"Page width {pt_w}pt seems to be in pixels, not points"
         assert pt_h < 700, f"Page height {pt_h}pt seems to be in pixels, not points"
+    finally:
+        doc.close()
+
+
+def test_트림된_PDF에는_JPEG로_임베드되어_업로드_크기가_줄어든다(tmp_path):
+    """finding 3: 업로드용 PDF에는 트림 이미지를 JPEG(quality=88)로
+    임베드해 크기를 절감해야 한다. 단, 크롭 소스(trimmed_paths)는 여전히
+    무손실 PNG여야 하고 픽셀 치수는 동일해야 한다(좌표 정합 유지).
+    """
+    from app.pipeline.run import _prepare_trimmed_input
+
+    temp_dir = tmp_path / "t"
+    temp_dir.mkdir()
+
+    # 사진풍 노이즈 이미지 (PNG는 잘 압축되지 않고 JPEG는 잘 압축되는 케이스)
+    rng = np.random.default_rng(42)
+    noisy = rng.integers(0, 256, size=(600, 800, 3), dtype=np.uint8)
+    photo = Image.fromarray(noisy, mode="RGB").filter(ImageFilter.GaussianBlur(radius=2))
+    img_path = tmp_path / "photo.png"
+    photo.save(img_path)
+
+    trimmed_pdf_path, trimmed_paths = _prepare_trimmed_input([img_path], temp_dir)
+
+    # 크롭 소스는 여전히 무손실 PNG
+    assert trimmed_paths[0].suffix == ".png"
+    png_size_bytes = trimmed_paths[0].stat().st_size
+    png_pixel_size = Image.open(trimmed_paths[0]).size
+
+    doc = fitz.open(str(trimmed_pdf_path))
+    try:
+        img_list = doc[0].get_images(full=True)
+        assert img_list, "임베드된 이미지가 없음"
+        xref = img_list[0][0]
+        embedded = doc.extract_image(xref)
+
+        assert embedded["ext"] in ("jpeg", "jpg"), \
+            f"업로드 PDF 이미지가 JPEG로 인코딩되지 않음: ext={embedded['ext']}"
+        assert len(embedded["image"]) < png_size_bytes, \
+            "JPEG 임베드가 PNG 대비 작아야 한다"
+
+        # 픽셀 치수(좌표 정합의 기준)는 PNG 크롭 소스와 동일해야 한다
+        pix = fitz.Pixmap(doc, xref)
+        assert (pix.width, pix.height) == png_pixel_size
     finally:
         doc.close()

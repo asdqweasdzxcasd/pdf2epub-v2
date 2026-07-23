@@ -4,6 +4,7 @@ CLI(scripts/convert.py)와 RQ 워커(app/tasks.py) 양쪽에서 공유.
 호출자가 progress 객체와 임시 디렉토리 라이프사이클을 관리한다.
 """
 
+import io
 import logging
 import os
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from app.pipeline.text_extract import build_layouts_from_text
 from app.pipeline.toc import extract_toc
 
 logger = logging.getLogger(__name__)
+
+_UPLOAD_JPEG_QUALITY = 88  # 업로드 PDF 내부 이미지 인코딩 품질 (크기 절감용)
 
 
 @dataclass
@@ -134,24 +137,41 @@ def _prepare_trimmed_input(page_images: list[Path], temp_dir: Path) -> tuple[Pat
     build_layouts_from_ocr(page_images=...)에 그대로 전달해야 한다 —
     Mistral이 실제로 본 이미지와 블록 bbox 기준, 크롭 소스가 모두
     같은 좌표계를 공유해야 하기 때문이다.
+
+    크롭 소스(trimmed_paths)는 항상 무손실 PNG로 저장한다 — 나중에 블록
+    bbox로 그림을 잘라낼 때 화질 손실이 누적되면 안 되기 때문이다. 반면
+    업로드용 PDF(trimmed_pdf_path)에는 같은 이미지를 JPEG(quality=88)로
+    인코딩해 넣는다 — Mistral API에 보내는 업로드 크기만 줄이는 용도이며,
+    픽셀 치수는 PNG와 동일하게 유지해 좌표 정합을 깨지 않는다.
     """
     trimmed_dir = temp_dir / "trimmed"
     trimmed_dir.mkdir(parents=True, exist_ok=True)
 
     trimmed_paths: list[Path] = []
     trimmed_sizes: list[tuple[int, int]] = []
+    trimmed_jpeg_bytes: list[bytes] = []
     for i, src in enumerate(page_images):
         with Image.open(src) as img:
             trimmed = trim_uniform_margins(img)
+
+            # 크롭 소스 — 무손실 PNG (좌표 정합의 기준 픽셀 치수도 여기서 온다)
             dst = trimmed_dir / f"page_{i:04d}.png"
             trimmed.save(dst)
             trimmed_paths.append(dst)
             trimmed_sizes.append(trimmed.size)
 
+            # 업로드 PDF 내부 인코딩 — JPEG는 알파를 지원하지 않으므로 RGB 변환
+            rgb_for_upload = (
+                trimmed.convert("RGB") if trimmed.mode != "RGB" else trimmed
+            )
+            buf = io.BytesIO()
+            rgb_for_upload.save(buf, format="JPEG", quality=_UPLOAD_JPEG_QUALITY)
+            trimmed_jpeg_bytes.append(buf.getvalue())
+
     trimmed_pdf_path = temp_dir / "trimmed.pdf"
     doc = fitz.open()
     try:
-        for path, (w, h) in zip(trimmed_paths, trimmed_sizes):
+        for jpeg_bytes, (w, h) in zip(trimmed_jpeg_bytes, trimmed_sizes):
             # Convert pixel dimensions (from 300 DPI render) to PDF points
             pt_w = w * 72 / RENDER_DPI
             pt_h = h * 72 / RENDER_DPI
@@ -164,7 +184,7 @@ def _prepare_trimmed_input(page_images: list[Path], temp_dir: Path) -> tuple[Pat
                 )
 
             page = doc.new_page(width=pt_w, height=pt_h)
-            page.insert_image(fitz.Rect(0, 0, pt_w, pt_h), filename=str(path))
+            page.insert_image(fitz.Rect(0, 0, pt_w, pt_h), stream=jpeg_bytes)
         doc.save(str(trimmed_pdf_path))
     finally:
         doc.close()

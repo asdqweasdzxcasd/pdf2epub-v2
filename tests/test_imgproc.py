@@ -1,4 +1,5 @@
 """imgproc.trim_uniform_margins 단위 테스트"""
+import numpy as np
 from PIL import Image, ImageDraw
 
 from app.pipeline.imgproc import trim_uniform_margins
@@ -79,3 +80,79 @@ def test_min_keep_파라미터_조정으로_작은_콘텐츠도_트림():
     trimmed = trim_uniform_margins(img, min_keep=0.0)
     assert trimmed.size != img.size
     assert trimmed.size[0] < img.size[0]
+
+
+# --- finding 1: 알파 채널 무시 ---
+
+
+def test_투명_여백은_흰_배경에_합성되어_트림된다():
+    """여백이 완전 투명(alpha=0)이지만 내부 RGB 값이 위치마다 들쭉날쭉한
+    "가비지 컬러"(일부 렌더러가 실제로 이렇게 만든다)여도, 알파를 무시하고
+    그대로 RGB 변환해 스캔하면 여백 전체가 노이즈투성이 콘텐츠로 오인된다.
+    알파 합성(흰 배경) 후 스캔하면 이런 오염과 무관하게 정상 트림돼야 한다.
+    """
+    size = 200
+    arr = np.zeros((size, size, 4), dtype=np.uint8)
+    arr[..., 0] = np.arange(size) % 256  # 열마다 달라지는 가비지 R
+    arr[..., 1] = (np.arange(size) * 3) % 256  # 가비지 G (행 방향)
+    arr[..., 2] = 128
+    arr[..., 3] = 0  # 완전 투명
+    arr[50:150, 50:150] = (0, 0, 0, 255)  # 불투명 검정 콘텐츠 박스
+    img = Image.fromarray(arr, mode="RGBA")
+
+    trimmed = trim_uniform_margins(img)
+
+    assert trimmed.size == (116, 116)
+    assert trimmed.mode == "RGBA"
+    cx, cy = trimmed.size[0] // 2, trimmed.size[1] // 2
+    assert trimmed.getpixel((cx, cy)) == (0, 0, 0, 255)
+
+
+def test_LA_모드_이미지도_알파_합성_후_트림된다():
+    size = 200
+    arr = np.zeros((size, size, 2), dtype=np.uint8)
+    arr[..., 0] = np.arange(size) % 256  # 가비지 명도
+    arr[..., 1] = 0  # 완전 투명
+    arr[50:150, 50:150] = (0, 255)  # 불투명 검정 콘텐츠
+    img = Image.fromarray(arr, mode="LA")
+
+    trimmed = trim_uniform_margins(img)
+
+    assert trimmed.size == (116, 116)
+    assert trimmed.mode == "LA"
+
+
+# --- finding 2: 고립 노이즈 픽셀이 행/열 전체를 콘텐츠로 오판 ---
+
+
+def test_고립된_노이즈_픽셀은_트림에_영향을_주지_않는다():
+    img = _make_margin_image()
+    px = img.load()
+    # 서로 다른 행/열에 흩어진 고립 노이즈 픽셀 (tol 초과, 스캔 먼지 시뮬레이션)
+    for x, y in [(5, 5), (10, 190), (195, 15), (3, 100), (198, 198)]:
+        px[x, y] = (0, 0, 0)
+    trimmed = trim_uniform_margins(img)
+    # 기본 occupancy(0.005)에서는 고립 픽셀 1개(비율 1/200=0.005)가 무시돼
+    # 여전히 정상 트림 결과(116x116)가 나와야 한다
+    assert trimmed.size == (116, 116)
+
+
+def test_연속된_콘텐츠는_occupancy_기준을_넘어_보존된다():
+    img = _make_margin_image()
+    draw = ImageDraw.Draw(img)
+    # 여백 안(메인 박스 밖)에 작은 선분 모양 콘텐츠(5x21px, 고립 노이즈가
+    # 아닌 연속 픽셀 뭉치) 추가 — 행/열 occupancy 둘 다 기본 임계치(0.005)를
+    # 넘으므로 트림 경계가 이 콘텐츠까지 확장돼 보존돼야 한다
+    draw.rectangle((15, 10, 19, 30), fill=(0, 0, 0))
+    trimmed = trim_uniform_margins(img)
+    assert trimmed.size[0] > 116
+    assert trimmed.size[1] > 116
+
+
+def test_occupancy_파라미터로_민감도_조정_가능():
+    img = _make_margin_image()
+    px = img.load()
+    px[5, 5] = (0, 0, 0)  # 고립 노이즈 1픽셀
+    # occupancy=0.0이면 예전처럼 단일 픽셀도 콘텐츠로 인식 -> 트림 경계 확장
+    trimmed = trim_uniform_margins(img, occupancy=0.0)
+    assert trimmed.size != (116, 116)
