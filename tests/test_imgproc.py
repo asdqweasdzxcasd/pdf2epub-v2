@@ -272,3 +272,63 @@ def test_halo_뒤에_숨은_채도_프레임이_4변_모두_제거된다():
     assert not np.any(np.all(arr == frame_color, axis=2))
     # 내부 검은 콘텐츠(80x80=6400px)는 한 픽셀도 잘리지 않아야 한다
     assert _black_pixel_count(result) == 6400
+
+
+def test_저채도_균일_프레임도_제거된다():
+    """실물 하단 프레임 재현: 채도 34짜리 연분홍 균일 띠는 chroma_min(40)
+    문턱을 못 넘지만, '배경과 다른 유채색 균일 띠'로는 판정돼 제거돼야 한다."""
+    img = _make_haloed_framed_diagram(
+        halo_color=(235, 218, 234),
+        frame_color=(215, 181, 212),  # 채도 34 — 기존 채도 밴드 기준 미달
+    )
+    result = strip_chromatic_frame(img)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    assert not np.any(np.all(arr == (215, 181, 212), axis=2))
+    assert not np.any(np.all(arr == (235, 218, 234), axis=2))
+    assert _black_pixel_count(result) == 6400
+
+
+def test_한_변만_프레임이_있어도_pad가_프레임을_되물지_않는다():
+    """top에만 halo+프레임이 있는 경우: 마지막 pad=2가 방금 벗겨낸 프레임
+    픽셀을 다시 포함하면 안 된다 (실물에서 상단 2px 분홍선 잔존 원인)."""
+    size = 120
+    img = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 2, size - 1, 4), fill=(235, 218, 234))   # halo 3px
+    draw.rectangle((0, 5, size - 1, 7), fill=(195, 144, 191))   # 프레임 3px
+    draw.rectangle((30, 40, 89, 99), fill=(0, 0, 0))            # 콘텐츠 60x60
+    result = strip_chromatic_frame(img)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    chroma = arr.max(axis=2) - arr.min(axis=2)
+    assert not np.any(chroma >= 15), "유채색(프레임/halo) 픽셀이 결과에 남음"
+    assert _black_pixel_count(result) == 3600
+
+
+def test_모서리_호_잔여물이_지워진다():
+    """직선 밴드 스트립 후 남는 둥근 모서리 호(arc) 재현: 흰 배경 + 네 귀퉁이에
+    분홍 호 조각 + 중앙 검은 콘텐츠 → 호만 지워지고 콘텐츠는 보존."""
+    size = 200
+    img = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    pink = (195, 144, 191)
+    # 각 귀퉁이에 3px 두께 사분원 호 (테두리에 접함)
+    draw.arc((0, 0, 24, 24), 180, 270, fill=pink, width=3)
+    draw.arc((size - 25, 0, size - 1, 24), 270, 360, fill=pink, width=3)
+    draw.arc((0, size - 25, 24, size - 1), 90, 180, fill=pink, width=3)
+    draw.arc((size - 25, size - 25, size - 1, size - 1), 0, 90, fill=pink, width=3)
+    draw.rectangle((60, 60, 139, 139), fill=(0, 0, 0))
+    result = strip_chromatic_frame(img)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    chroma = arr.max(axis=2) - arr.min(axis=2)
+    assert not np.any(chroma >= 15), "모서리 호 잔여물이 남음"
+    assert _black_pixel_count(result) == 6400
+
+
+def test_전면_유채색_콘텐츠는_모서리_지우기가_건드리지_않는다():
+    """크롭 전체가 보라색 배경(실물 blk_000 유형): 귀퉁이 성분이 창을 가득
+    채우므로 크기 가드에 걸려 아무것도 지워지지 않아야 한다."""
+    img = Image.new("RGB", (100, 300), (176, 108, 170))
+    ImageDraw.Draw(img).rectangle((30, 100, 69, 199), fill=(0, 0, 0))
+    result = strip_chromatic_frame(img)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    assert np.any(np.all(arr == (176, 108, 170), axis=2)), "전면 유채색 배경이 지워짐"

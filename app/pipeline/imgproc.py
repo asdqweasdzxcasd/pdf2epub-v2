@@ -146,6 +146,9 @@ def _is_uniform_line(line_rgb: np.ndarray, tol: int, occupancy: float = _HALO_UN
     return float((diff <= tol).mean()) >= occupancy
 
 
+_SOFT_CHROMA_MIN = 15  # "유채색 균일 띠"로 볼 최소 채도 (검은/회색 선 보호 문턱)
+
+
 def _edge_frame_depth(
     rgb_edge: np.ndarray,
     max_band: int,
@@ -154,40 +157,133 @@ def _edge_frame_depth(
     halo_allow: int,
 ) -> int:
     """rgb_edge(가장자리→안쪽으로 정렬된 RGB 배열, index 0이 바깥 가장자리)에서
-    halo(저채도 균일 밴드) 뒤에 숨은 채도 프레임 밴드의 깊이(px)를 반환한다.
+    장식 프레임 밴드(halo 포함)의 깊이(px)를 반환한다.
 
-    가장자리에서 안쪽으로 탐색 창(max_band + halo_allow) 안을 스캔하며,
-    색상 무관 근사 균일한 행/열(흰 여백이든 halo든, _is_uniform_line 참고)은
-    건너뛴다. 채도 밴드(chroma_min 이상 픽셀이 span_min 비율 이상)를 만나면
-    그 지점부터 최대 max_band까지 밴드 두께를 재고, "건너뛴 halo 깊이 +
-    밴드 두께"를 합쳐 반환한다 — 가장자리부터 밴드 끝까지 전부 제거하기
-    위함이다. 균일하지도 채도 밴드도 아닌 행/열(실제 콘텐츠)을 만나면
-    그 변의 탐색을 중단하고 0을 반환한다(콘텐츠 보호).
+    실물 책 프레임은 변마다 채도가 다르다(실측: 상단 66, 하단 34) — 고채도
+    밴드(chroma_min·span_min)뿐 아니라 **배경과 다른 유채색(중앙값 채도
+    ≥ _SOFT_CHROMA_MIN) 균일 행/열**도 프레임 구성 요소로 인정한다.
+    검은/회색 표 테두리는 채도가 문턱 미만이라 "콘텐츠"로 분류돼 보호된다.
+
+    판정 규칙 (라인 단위, 배경색 추정 불필요 — 프레임이 크롭 가장자리에 딱
+    붙어 있으면 "바깥 2px 배경 추정"이 프레임 색으로 오염되므로 쓰지 않는다):
+    - **배경 행** = 근사 균일 AND 중앙값 채도 < _SOFT_CHROMA_MIN (흰/회색 여백)
+    - **프레임 성분 행** = 고채도 밴드(chroma_min·span_min) OR
+      근사 균일 AND 중앙값 채도 ≥ _SOFT_CHROMA_MIN (halo·연한 프레임)
+    - 프레임 성분을 1행 이상 본 뒤 배경 행을 만나면 → 거기까지의 깊이 반환
+      ("배경(무채색 여백) 사이에 낀 유채색 띠"만 프레임으로 확정)
+    - 그 외 행(콘텐츠)을 만나면 → 0 (이 변 포기)
+    - 창을 소진하면 → 0 (전면 유채색 단색 이미지 등은 배경 재개가 없어 보호,
+      검은/회색 선은 채도가 낮아 배경으로 분류되므로 saw_frame이 서지 않아 보호)
 
     rgb_edge는 이미 "이 변에서 바라본" 방향으로 정렬돼 있어야 한다 — 호출자가
     top/bottom/left/right에 맞게 배열을 뒤집거나 전치해 넘긴다.
     """
     window = max_band + halo_allow
-    n = min(window, rgb_edge.shape[0])
+    n = min(window + 1, rgb_edge.shape[0])
     chroma = rgb_edge.max(axis=2) - rgb_edge.min(axis=2)
 
-    skip = 0
+    depth = 0
+    saw_frame = False
     for i in range(n):
-        if _chroma_span(chroma[i], chroma_min) >= span_min:
-            band_depth = 0
-            limit = min(max_band, n - i)
-            for j in range(i, i + limit):
-                if _chroma_span(chroma[j], chroma_min) >= span_min:
-                    band_depth += 1
-                else:
-                    break
-            return skip + band_depth
-        if _is_uniform_line(rgb_edge[i], _HALO_UNIFORM_TOL):
-            skip += 1
-            continue
-        break  # 균일하지도 채도 밴드도 아닌 실제 콘텐츠 — 탐색 중단
+        line = rgb_edge[i]
+        median = np.median(line, axis=0)
+        med_chroma = int(median.max() - median.min())
+        uniform = _is_uniform_line(line, _HALO_UNIFORM_TOL)
 
-    return 0
+        if uniform and med_chroma < _SOFT_CHROMA_MIN:
+            if saw_frame:
+                return depth  # 프레임 띠가 끝나고 무채색 배경 재개 — 확정
+            depth += 1  # 선두 배경 행 — 제거해도 무해 (마지막 트림이 어차피 정리)
+            continue
+
+        strong_band = _chroma_span(chroma[i], chroma_min) >= span_min
+        colored_uniform = uniform and med_chroma >= _SOFT_CHROMA_MIN
+        if strong_band or colored_uniform:
+            saw_frame = True
+            depth += 1
+            continue
+
+        return 0  # 콘텐츠 행 — 이 변 포기
+
+    return 0  # 창 소진 — 배경 재개를 못 봤으면 프레임으로 확정하지 않는다
+
+
+_CORNER_WINDOW = 18  # 모서리 호 탐색 창 한 변(px)
+_CORNER_MAX_AREA_FRAC = 0.6  # 창 대비 이 비율보다 큰 성분은 콘텐츠로 보고 보존
+
+
+def _erase_corner_arcs(img: Image.Image, chroma_min: int = _SOFT_CHROMA_MIN) -> Image.Image:
+    """직선 프레임 밴드를 벗겨낸 뒤 네 귀퉁이에 남는 둥근 모서리 호(arc)
+    조각을 지운다.
+
+    호는 행/열 점유율이 낮아 균일 트림(노이즈 취급)에도, 프레임 밴드 탐지
+    (span 미달)에도 안 잡히는 사각지대다. 크롭 경계를 움직이는 대신, 각
+    귀퉁이의 작은 창(_CORNER_WINDOW²) 안에서 이미지 테두리에 접한 소형
+    유채색 연결 성분만 창 내 배경 중앙값 색으로 칠한다 — 콘텐츠 손실이
+    구조적으로 불가능한 외과적 후처리.
+
+    보호 장치: 성분이 창 면적의 _CORNER_MAX_AREA_FRAC를 넘으면 콘텐츠
+    (전면 유채색 배경 크롭 등)로 보고 건드리지 않는다.
+    """
+    rgb = _scan_rgb(img)
+    h, w = rgb.shape[:2]
+    k = min(_CORNER_WINDOW, h // 2, w // 2)
+    if k < 3:
+        return img
+
+    out = np.asarray(img.convert("RGB"), dtype=np.uint8).copy()
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    max_area = _CORNER_MAX_AREA_FRAC * k * k
+
+    # (row 슬라이스, col 슬라이스, 창 좌표계에서 테두리에 해당하는 변)
+    corners = [
+        (slice(0, k), slice(0, k), ("top", "left")),
+        (slice(0, k), slice(w - k, w), ("top", "right")),
+        (slice(h - k, h), slice(0, k), ("bottom", "left")),
+        (slice(h - k, h), slice(w - k, w), ("bottom", "right")),
+    ]
+    for rs, cs, edges in corners:
+        window_mask = chroma[rs, cs] >= chroma_min
+        if not window_mask.any():
+            continue
+        # 테두리 접촉 픽셀에서 시작하는 연결 성분 (4-이웃 BFS)
+        kh, kw = window_mask.shape
+        seeds = []
+        if "top" in edges:
+            seeds += [(0, x) for x in range(kw) if window_mask[0, x]]
+        if "bottom" in edges:
+            seeds += [(kh - 1, x) for x in range(kw) if window_mask[kh - 1, x]]
+        if "left" in edges:
+            seeds += [(y, 0) for y in range(kh) if window_mask[y, 0]]
+        if "right" in edges:
+            seeds += [(y, kw - 1) for y in range(kh) if window_mask[y, kw - 1]]
+        if not seeds:
+            continue
+        visited = np.zeros_like(window_mask)
+        stack = list(seeds)
+        component = []
+        while stack:
+            y, x = stack.pop()
+            if not (0 <= y < kh and 0 <= x < kw) or visited[y, x] or not window_mask[y, x]:
+                continue
+            visited[y, x] = True
+            component.append((y, x))
+            stack += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
+        if not component or len(component) > max_area:
+            continue  # 성분 없음 또는 콘텐츠급 대형 성분 — 보존
+        # 창 내 비유채색 픽셀의 중앙값을 배경색으로 사용해 칠한다
+        bg_pixels = rgb[rs, cs][~window_mask]
+        fill = (
+            np.median(bg_pixels, axis=0).astype(np.uint8)
+            if bg_pixels.size
+            else np.array([255, 255, 255], np.uint8)
+        )
+        base_y, base_x = rs.start, cs.start
+        for y, x in component:
+            out[base_y + y, base_x + x] = fill
+
+    result = Image.fromarray(out)
+    return result
 
 
 def strip_chromatic_frame(
@@ -241,7 +337,9 @@ def strip_chromatic_frame(
     w0, h0 = img.size
     # 절대 좌표(원본 img 기준) 콘텐츠 bbox. 처음엔 이미지 전체.
     left, top, right, bottom = 0, 0, w0 - 1, h0 - 1
-
+    # 프레임을 벗겨낸 변의 경계 — 마지막 pad가 이 선을 넘어 프레임을
+    # 되물지 않도록 하는 하드 바운더리 (실물의 둥근 모서리 잔여물 대응)
+    hard_l, hard_t, hard_r, hard_b = 0, 0, w0 - 1, h0 - 1
     for _ in range(max_iter):
         sub = img.crop((left, top, right + 1, bottom + 1))
         w, h = sub.size
@@ -281,13 +379,22 @@ def strip_chromatic_frame(
         bottom -= d_bottom
         left += d_left
         right -= d_right
+        # 벗겨낸 변은 하드 바운더리 갱신 — 마지막 pad가 이 안쪽까지만 확장 가능
+        if d_top:
+            hard_t = top
+        if d_bottom:
+            hard_b = bottom
+        if d_left:
+            hard_l = left
+        if d_right:
+            hard_r = right
 
     # ③ 마지막 pad=2 — 원본 img에서 콘텐츠 bbox 주변 실제 배경 픽셀을 포함해
     # 다시 크롭한 뒤 trim_uniform_margins로 정리한다(안전장치 min_keep 등 재사용).
     pad = 2
-    fl = max(0, left - pad)
-    ft = max(0, top - pad)
-    fr = min(w0 - 1, right + pad)
-    fb = min(h0 - 1, bottom + pad)
+    fl = max(hard_l, left - pad)
+    ft = max(hard_t, top - pad)
+    fr = min(hard_r, right + pad)
+    fb = min(hard_b, bottom + pad)
     final_sub = img.crop((fl, ft, fr + 1, fb + 1))
-    return trim_uniform_margins(final_sub, pad=pad)
+    return _erase_corner_arcs(trim_uniform_margins(final_sub, pad=pad))
