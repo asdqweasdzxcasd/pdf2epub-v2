@@ -223,3 +223,52 @@ def test_프레임_없는_이미지는_trim_pad2와_동일하다():
     expected = trim_uniform_margins(img, pad=2)
     assert result.size == expected.size
     assert result.tobytes() == expected.tobytes()
+
+
+# --- finding: halo 뒤에 숨은 채도 프레임 (실물 진단 page_0002_blk_001.png 재현) ---
+
+
+def _make_haloed_framed_diagram(
+    size=200,
+    white=(255, 255, 255),
+    halo_color=(235, 218, 234),  # 채도 17 — chroma_min(40) 미만
+    frame_color=(195, 129, 191),  # 채도 66 — 진짜 프레임
+    white_width=2,
+    halo_width=3,
+    frame_width=3,
+    diagram_box=(60, 60, 139, 139),
+):
+    """가장자리부터 흰 여백 → 균일 halo(연분홍, 저채도) → 진짜 채도 프레임
+    → 흰 여백 → 검은 콘텐츠 순으로 겹겹이 채운 동심 사각 프레임(4변 모두).
+
+    바깥에서 안쪽으로 점점 작은 사각형을 덧칠하는 방식이라 4변 모두 같은
+    두께의 링이 자연스럽게 만들어진다(모서리 특수 처리 불필요).
+    halo는 배경(흰색)과의 채널 최대 편차(37)가 trim_uniform_margins의
+    tol(12)을 넘어 균일 트림으로도 안 지워지고, 채도(17)가 chroma_min(40)
+    미만이라 기존 채도 밴드 탐지에도 걸리지 않아 실물에서 프레임 제거가
+    막히는 상황을 재현한다.
+    """
+    img = Image.new("RGB", (size, size), white)
+    draw = ImageDraw.Draw(img)
+    d1 = white_width
+    d2 = white_width + halo_width
+    d3 = white_width + halo_width + frame_width
+    draw.rectangle((d1, d1, size - 1 - d1, size - 1 - d1), fill=halo_color)
+    draw.rectangle((d2, d2, size - 1 - d2, size - 1 - d2), fill=frame_color)
+    draw.rectangle((d3, d3, size - 1 - d3, size - 1 - d3), fill=white)
+    draw.rectangle(diagram_box, fill=(0, 0, 0))
+    return img
+
+
+def test_halo_뒤에_숨은_채도_프레임이_4변_모두_제거된다():
+    halo_color = (235, 218, 234)
+    frame_color = (195, 129, 191)
+    img = _make_haloed_framed_diagram(halo_color=halo_color, frame_color=frame_color)
+    result = strip_chromatic_frame(img)
+
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    # halo, 프레임 색 모두 결과에서 완전히 사라져야 한다(4변 모두)
+    assert not np.any(np.all(arr == halo_color, axis=2))
+    assert not np.any(np.all(arr == frame_color, axis=2))
+    # 내부 검은 콘텐츠(80x80=6400px)는 한 픽셀도 잘리지 않아야 한다
+    assert _black_pixel_count(result) == 6400

@@ -121,21 +121,73 @@ def trim_uniform_margins(
     return img.crop((left, top, right + 1, bottom + 1))
 
 
-def _edge_band_depth(mask: np.ndarray, max_band: int, span_min: float) -> int:
-    """mask(행 방향 bool 배열)의 위쪽 가장자리부터 max_band까지, 각 행의
-    True 비율이 span_min 이상인 연속 구간의 깊이(px)를 반환한다.
+_HALO_UNIFORM_TOL = 20  # halo 여부 무관, 행/열 픽셀이 중앙값과 "근사 같음"으로 볼 채널 편차 상한
+_HALO_UNIFORM_OCCUPANCY = 0.85  # 근사 균일 판정에 필요한 최소 비율(둥근 모서리 등 소수 예외 허용)
 
-    mask는 이미 "이 변에서 바라본" 방향으로 정렬돼 있어야 한다 — 호출자가
+
+def _chroma_span(row_chroma: np.ndarray, chroma_min: int) -> float:
+    """행/열 1개 분량의 채도 배열에서 chroma_min 이상 픽셀의 비율."""
+    return float((row_chroma >= chroma_min).mean())
+
+
+def _is_uniform_line(line_rgb: np.ndarray, tol: int, occupancy: float = _HALO_UNIFORM_OCCUPANCY) -> bool:
+    """행/열(line_rgb, shape (N, 3)) 픽셀들이 색상 무관하게 근사 균일한지 판정한다.
+
+    실물 스캔의 halo 밴드는 둥근 모서리·안티앨리어싱 경계에서 바깥 여백색
+    쪽으로 서서히 번져 나가는 픽셀이 섞여 있어(예: 왼쪽 halo 밴드를 위→아래로
+    훑으면 상하 모서리 부근 몇 %는 위/아래쪽 변의 흰 여백이 비쳐 보임),
+    엄격한 min-max나 백분위수 범위로는 소수 예외 때문에 오탐(실제로는
+    균일한데 콘텐츠로 오판)하기 쉽다. 대신 채널별 중앙값과의 최대 편차가
+    tol 이하인 픽셀 비율이 occupancy 이상이면 균일로 본다 — _uniform_bbox의
+    occupancy 판정과 같은 접근이다.
+    """
+    median = np.median(line_rgb, axis=0)
+    diff = np.abs(line_rgb - median).max(axis=1)
+    return float((diff <= tol).mean()) >= occupancy
+
+
+def _edge_frame_depth(
+    rgb_edge: np.ndarray,
+    max_band: int,
+    chroma_min: int,
+    span_min: float,
+    halo_allow: int,
+) -> int:
+    """rgb_edge(가장자리→안쪽으로 정렬된 RGB 배열, index 0이 바깥 가장자리)에서
+    halo(저채도 균일 밴드) 뒤에 숨은 채도 프레임 밴드의 깊이(px)를 반환한다.
+
+    가장자리에서 안쪽으로 탐색 창(max_band + halo_allow) 안을 스캔하며,
+    색상 무관 근사 균일한 행/열(흰 여백이든 halo든, _is_uniform_line 참고)은
+    건너뛴다. 채도 밴드(chroma_min 이상 픽셀이 span_min 비율 이상)를 만나면
+    그 지점부터 최대 max_band까지 밴드 두께를 재고, "건너뛴 halo 깊이 +
+    밴드 두께"를 합쳐 반환한다 — 가장자리부터 밴드 끝까지 전부 제거하기
+    위함이다. 균일하지도 채도 밴드도 아닌 행/열(실제 콘텐츠)을 만나면
+    그 변의 탐색을 중단하고 0을 반환한다(콘텐츠 보호).
+
+    rgb_edge는 이미 "이 변에서 바라본" 방향으로 정렬돼 있어야 한다 — 호출자가
     top/bottom/left/right에 맞게 배열을 뒤집거나 전치해 넘긴다.
     """
-    depth = 0
-    limit = min(max_band, mask.shape[0])
-    for i in range(limit):
-        if mask[i, :].mean() >= span_min:
-            depth += 1
-        else:
-            break
-    return depth
+    window = max_band + halo_allow
+    n = min(window, rgb_edge.shape[0])
+    chroma = rgb_edge.max(axis=2) - rgb_edge.min(axis=2)
+
+    skip = 0
+    for i in range(n):
+        if _chroma_span(chroma[i], chroma_min) >= span_min:
+            band_depth = 0
+            limit = min(max_band, n - i)
+            for j in range(i, i + limit):
+                if _chroma_span(chroma[j], chroma_min) >= span_min:
+                    band_depth += 1
+                else:
+                    break
+            return skip + band_depth
+        if _is_uniform_line(rgb_edge[i], _HALO_UNIFORM_TOL):
+            skip += 1
+            continue
+        break  # 균일하지도 채도 밴드도 아닌 실제 콘텐츠 — 탐색 중단
+
+    return 0
 
 
 def strip_chromatic_frame(
@@ -144,14 +196,23 @@ def strip_chromatic_frame(
     chroma_min: int = 40,
     span_min: float = 0.7,
     max_iter: int = 3,
+    halo_allow: int = 6,
 ) -> Image.Image:
     """책 장식용 채도 높은 둥근 프레임 선을 그림 크롭 가장자리에서 제거한다.
 
     trim_uniform_margins는 배경색과 다른 픽셀이 섞인 행/열을 콘텐츠로 보고
     멈추므로, 4변 전체(또는 대부분)를 가로지르는 장식 프레임 선은 "콘텐츠"로
-    오판되어 남는다. 이 함수는 가장자리 근처 max_band px 이내에서 채도
-    (max(R,G,B)-min(R,G,B))가 chroma_min 이상인 픽셀이 해당 행/열의
-    span_min 비율 이상을 차지하는 연속 밴드를 변마다 찾아 제거한다.
+    오판되어 남는다. 이 함수는 가장자리 근처에서 채도(max(R,G,B)-min(R,G,B))가
+    chroma_min 이상인 픽셀이 해당 행/열의 span_min 비율 이상을 차지하는
+    연속 밴드를 변마다 찾아 제거한다.
+
+    실물 스캔에서는 진짜 프레임 선 바깥쪽에 저채도 halo(안티앨리어싱 번짐)가
+    붙어 있는 경우가 있다 — halo는 채도가 낮아(chroma_min 미만) 밴드로 잡히지
+    않고, 동시에 배경색과의 채널 편차는 커서(tol 초과) 균일 트림으로도
+    지워지지 않아 프레임 제거가 막힌다. 이를 위해 가장자리부터 탐색 창
+    (max_band + halo_allow px) 안에서, 색상 무관 근사 균일한 행/열(halo 포함)은
+    건너뛰면서 채도 밴드를 찾는다 — 밴드를 찾으면 가장자리부터 밴드 끝까지
+    (halo 포함) 한 번에 제거한다. 자세한 스캔 로직은 _edge_frame_depth 참고.
 
     검은/회색(무채색) 선은 채도가 0에 가까워 chroma_min을 넘지 못하므로
     이 로직으로는 절대 제거되지 않는다 — 표 등 실제 콘텐츠 테두리 보호.
@@ -166,10 +227,12 @@ def strip_chromatic_frame(
 
     Args:
         img: 입력 이미지 (모드 무관 — 채도 판정은 RGB 변환 후 수행)
-        max_band: 변당 탐지할 최대 밴드 두께(px)
+        max_band: 변당 탐지할 최대 밴드(halo 제외, 프레임 자체) 두께(px)
         chroma_min: 프레임 픽셀로 판정할 최소 채도
         span_min: 밴드로 판정할 행/열 내 채도 픽셀 비율 임계치(0~1)
         max_iter: 반복 상한
+        halo_allow: 프레임 밴드 앞에 허용할 halo(근사 균일 저채도 구간)
+            최대 두께(px) — 탐색 창은 max_band + halo_allow
 
     Returns:
         프레임이 제거되고 pad=2로 트림된 이미지. 프레임이 없으면
@@ -193,17 +256,17 @@ def strip_chromatic_frame(
         left, top = left + bl, top + bt
         right, bottom = left + (br - bl), top + (bb - bt)
 
-        # ② 좁혀진 영역의 4변에서 채도 밴드 탐지
+        # ② 좁혀진 영역의 4변에서 (halo 뒤에 숨은 것 포함) 채도 밴드 탐지
         sub = img.crop((left, top, right + 1, bottom + 1))
         rgb = _scan_rgb(sub)
-        chroma = rgb.max(axis=2) - rgb.min(axis=2)
-        is_chromatic = chroma >= chroma_min
-        h, w = is_chromatic.shape
+        h, w = rgb.shape[:2]
 
-        d_top = _edge_band_depth(is_chromatic, max_band, span_min)
-        d_bottom = _edge_band_depth(is_chromatic[::-1, :], max_band, span_min)
-        d_left = _edge_band_depth(is_chromatic.T, max_band, span_min)
-        d_right = _edge_band_depth(is_chromatic[:, ::-1].T, max_band, span_min)
+        d_top = _edge_frame_depth(rgb, max_band, chroma_min, span_min, halo_allow)
+        d_bottom = _edge_frame_depth(rgb[::-1, :, :], max_band, chroma_min, span_min, halo_allow)
+        d_left = _edge_frame_depth(rgb.transpose(1, 0, 2), max_band, chroma_min, span_min, halo_allow)
+        d_right = _edge_frame_depth(
+            rgb[:, ::-1, :].transpose(1, 0, 2), max_band, chroma_min, span_min, halo_allow
+        )
 
         # 상하/좌우 밴드 합이 전체를 잠식하지 않도록 클램프
         if d_top + d_bottom >= h:
