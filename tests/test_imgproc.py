@@ -305,18 +305,17 @@ def test_한_변만_프레임이_있어도_pad가_프레임을_되물지_않는�
 
 
 def test_모서리_호_잔여물이_지워진다():
-    """직선 밴드 스트립 후 남는 둥근 모서리 호(arc) 재현: 흰 배경 + 네 귀퉁이에
-    분홍 호 조각 + 중앙 검은 콘텐츠 → 호만 지워지고 콘텐츠는 보존."""
+    """실물 재현: 직선 프레임 밴드(halo 포함) + 둥근 모서리 호 → 밴드 스트립 후
+    남는 호까지 지워지고 콘텐츠는 보존. (호 지우개는 밴드를 벗긴 크롭에서만 동작)"""
     size = 200
-    img = Image.new("RGB", (size, size), (255, 255, 255))
+    img = _make_haloed_framed_diagram()
     draw = ImageDraw.Draw(img)
     pink = (195, 144, 191)
-    # 각 귀퉁이에 3px 두께 사분원 호 (테두리에 접함)
-    draw.arc((0, 0, 24, 24), 180, 270, fill=pink, width=3)
-    draw.arc((size - 25, 0, size - 1, 24), 270, 360, fill=pink, width=3)
-    draw.arc((0, size - 25, 24, size - 1), 90, 180, fill=pink, width=3)
-    draw.arc((size - 25, size - 25, size - 1, size - 1), 0, 90, fill=pink, width=3)
-    draw.rectangle((60, 60, 139, 139), fill=(0, 0, 0))
+    # 프레임의 둥근 모서리 호 (밴드 스트립 후 잔여물이 되는 부분)
+    draw.arc((0, 0, 30, 30), 180, 270, fill=pink, width=3)
+    draw.arc((size - 31, 0, size - 1, 30), 270, 360, fill=pink, width=3)
+    draw.arc((0, size - 31, 30, size - 1), 90, 180, fill=pink, width=3)
+    draw.arc((size - 31, size - 31, size - 1, size - 1), 0, 90, fill=pink, width=3)
     result = strip_chromatic_frame(img)
     arr = np.asarray(result.convert("RGB"), dtype=np.int16)
     chroma = arr.max(axis=2) - arr.min(axis=2)
@@ -332,3 +331,16 @@ def test_전면_유채색_콘텐츠는_모서리_지우기가_건드리지_않�
     result = strip_chromatic_frame(img)
     arr = np.asarray(result.convert("RGB"), dtype=np.int16)
     assert np.any(np.all(arr == (176, 108, 170), axis=2)), "전면 유채색 배경이 지워짐"
+
+
+def test_프레임_없는_크롭의_모서리_컬러_콘텐츠는_보존된다():
+    """Codex P1 반영: 프레임 밴드가 없는 크롭은 모서리 호 지우개가 돌지 않아야
+    한다 — 모서리에 걸친 컬러 로고/스트로크가 정상 콘텐츠인 경우."""
+    img = Image.new("RGB", (200, 200), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    logo = (200, 60, 60)
+    draw.ellipse((2, 2, 14, 14), fill=logo)  # 좌상단 모서리에 걸친 작은 컬러 로고
+    draw.rectangle((60, 60, 139, 139), fill=(0, 0, 0))
+    result = strip_chromatic_frame(img)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    assert np.any(np.all(arr == logo, axis=2)), "프레임 없는 크롭의 모서리 콘텐츠가 지워짐"

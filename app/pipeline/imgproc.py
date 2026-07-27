@@ -313,6 +313,12 @@ def strip_chromatic_frame(
     검은/회색(무채색) 선은 채도가 0에 가까워 chroma_min을 넘지 못하므로
     이 로직으로는 절대 제거되지 않는다 — 표 등 실제 콘텐츠 테두리 보호.
 
+    알려진 한계 (의도된 트레이드오프): 크롭 가장자리에 딱 붙은 얇은(≤max_band)
+    유채색 콘텐츠 밴드(예: 컬러 구분선)가 뒤따르는 무채색 여백과 함께 있으면
+    장식 프레임과 구별할 수 없어 함께 제거될 수 있다. 두께 상한(max_band)이
+    컬러 헤더 등 두꺼운 콘텐츠를 보호하며, bbox 외측 패딩(pad_out) 덕분에
+    실제 콘텐츠가 크롭 가장자리에 정확히 붙는 경우 자체가 드물다.
+
     각 반복은: ① 현재 콘텐츠 bbox를 pad=0 기준으로 재계산(프레임 제거로
     새로 드러난 여백을 다음 반복에서 마저 정리) ② 4변에서 채도 밴드 탐지
     후 bbox를 안쪽으로 좁힌다. 어느 변에서도 밴드가 제거되지 않으면 반복을
@@ -340,6 +346,7 @@ def strip_chromatic_frame(
     # 프레임을 벗겨낸 변의 경계 — 마지막 pad가 이 선을 넘어 프레임을
     # 되물지 않도록 하는 하드 바운더리 (실물의 둥근 모서리 잔여물 대응)
     hard_l, hard_t, hard_r, hard_b = 0, 0, w0 - 1, h0 - 1
+    stripped_any = False  # 밴드를 실제로 벗긴 경우에만 모서리 호 지우개를 돌린다
     for _ in range(max_iter):
         sub = img.crop((left, top, right + 1, bottom + 1))
         w, h = sub.size
@@ -379,6 +386,7 @@ def strip_chromatic_frame(
         bottom -= d_bottom
         left += d_left
         right -= d_right
+        stripped_any = True
         # 벗겨낸 변은 하드 바운더리 갱신 — 마지막 pad가 이 안쪽까지만 확장 가능
         if d_top:
             hard_t = top
@@ -397,4 +405,9 @@ def strip_chromatic_frame(
     fr = min(hard_r, right + pad)
     fb = min(hard_b, bottom + pad)
     final_sub = img.crop((fl, ft, fr + 1, fb + 1))
-    return _erase_corner_arcs(trim_uniform_margins(final_sub, pad=pad))
+    result = trim_uniform_margins(final_sub, pad=pad)
+    # 모서리 호는 프레임 밴드의 부속물 — 밴드를 벗긴 크롭에서만 지운다.
+    # (무조건 돌리면 프레임 없는 그림의 모서리에 걸친 컬러 콘텐츠까지 지울 위험)
+    if stripped_any:
+        result = _erase_corner_arcs(result)
+    return result
