@@ -193,3 +193,40 @@ def test_equation_블록도_크롭된다(tmp_path):
     blk = layouts[0].blocks[0]
     assert blk.block_type is BlockType.FORMULA
     assert blk.image_path and (figures / blk.image_path).exists()
+
+
+def test_bbox가_테두리를_못담으면_콘텐츠_경계까지_확장된다(tmp_path):
+    """실물 발견: Mistral bbox가 다이어그램 자체의 하단/우측 테두리선을 몇 px
+    못 담는 undershoot이 있음 → 크롭 경계에 콘텐츠가 걸려 있으면 배경이 나올
+    때까지 확장해서 테두리를 온전히 포함해야 한다."""
+    from PIL import Image, ImageDraw
+
+    page = Image.new("RGB", (400, 400), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((50, 50, 349, 349), outline=(0, 0, 0), width=3)  # 표 바깥 테두리
+    # 표 내부 선들 — bbox 경계에 stub으로 걸리는 실물 구조 재현
+    for x in (150, 250):
+        draw.line((x, 50, x, 349), fill=(0, 0, 0), width=3)  # 세로 칸막이
+    draw.line((50, 200, 349, 200), fill=(0, 0, 0), width=3)  # 가로 칸막이
+    p = tmp_path / "page.png"
+    page.save(p)
+
+    figures = tmp_path / "figures"
+    pages = [{
+        "index": 0, "dimensions": {"width": 400, "height": 400}, "markdown": "",
+        # bbox가 테두리 안쪽(60..335)까지만 — 우측/하단 테두리(347~349)를 놓침
+        "blocks": [{"type": "image", "top_left_x": 60, "top_left_y": 60,
+                    "bottom_right_x": 335, "bottom_right_y": 335, "content": ""}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[p], figures_dir=figures)
+    blk = layouts[0].blocks[0]
+    assert blk.image_path
+
+    import numpy as np
+    crop = np.asarray(Image.open(figures / blk.image_path).convert("RGB"), dtype=np.int16)
+    dark = crop.max(axis=2) < 100
+    # 하단/우측 테두리의 "긴 검은 런"이 크롭 안에 존재해야 한다 (200px 이상)
+    assert max(int(dark[y].sum()) for y in range(dark.shape[0])) >= 280, "가로 테두리 미포함"
+    assert max(int(dark[:, x].sum()) for x in range(dark.shape[1])) >= 280, "세로 테두리 미포함"
+    # 그리고 크롭 마지막 행/열에 콘텐츠 stub이 걸려있지 않아야 한다 (잘림 흔적 없음)
+    assert int(dark[-1].sum()) == 0 and int(dark[:, -1].sum()) == 0, "경계에 잘린 stub 존재"

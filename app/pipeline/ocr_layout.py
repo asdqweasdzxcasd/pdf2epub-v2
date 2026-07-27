@@ -117,6 +117,51 @@ def build_layouts_from_ocr(
     return layouts
 
 
+_EXTEND_CAP = 40  # 변당 콘텐츠 경계 확장 상한(px)
+_EXTEND_MIN_CONTENT = 3  # 경계 행/열을 "콘텐츠 걸림"으로 볼 최소 어두운/유채색 픽셀 수
+
+
+def _extend_to_content_boundary(img: Image.Image, x0: int, y0: int, x1: int, y1: int):
+    """bbox 경계에 콘텐츠 픽셀이 걸려 있으면 배경 행/열이 나올 때까지 확장한다.
+
+    Mistral bbox는 다이어그램 자체의 테두리선을 몇 px 못 담는 undershoot이
+    있다 (실측: 하단 가로 테두리가 잘려 세로선 stub만 남음). 고정 패딩만으로는
+    undershoot 크기가 가변이라 부족하고, 과하게 키우면 이웃 캡션을 물어온다.
+    경계 행/열에 비배경 픽셀이 남아있는 동안만 1px씩, 변당 최대 _EXTEND_CAP까지
+    확장해 "콘텐츠가 배경으로 닫히는 지점"에서 정확히 멈춘다.
+    """
+    import numpy as np
+
+    arr = np.asarray(img.convert("RGB"), dtype=np.int16)
+    h, w = arr.shape[:2]
+    dark_or_colored = (arr.min(axis=2) < 200) | ((arr.max(axis=2) - arr.min(axis=2)) >= 15)
+
+    def edge_has_content(rows, cols):
+        return int(dark_or_colored[rows, cols].sum()) >= _EXTEND_MIN_CONTENT
+
+    for _ in range(_EXTEND_CAP):
+        if y1 < h and edge_has_content(y1 - 1, slice(x0, x1)):
+            y1 += 1
+        else:
+            break
+    for _ in range(_EXTEND_CAP):
+        if x1 < w and edge_has_content(slice(y0, y1), x1 - 1):
+            x1 += 1
+        else:
+            break
+    for _ in range(_EXTEND_CAP):
+        if y0 > 0 and edge_has_content(y0, slice(x0, x1)):
+            y0 -= 1
+        else:
+            break
+    for _ in range(_EXTEND_CAP):
+        if x0 > 0 and edge_has_content(slice(y0, y1), x0):
+            x0 -= 1
+        else:
+            break
+    return x0, y0, x1, y1
+
+
 def _crop_block(
     raw: dict,
     page: dict,
@@ -142,6 +187,7 @@ def _crop_block(
             x0, y0, x1, y1 = scale_bbox(raw, w, h, page.get("dimensions") or {})
             if x1 <= x0 or y1 <= y0:
                 return None
+            x0, y0, x1, y1 = _extend_to_content_boundary(img, x0, y0, x1, y1)
             x0, y0 = max(0, x0 - _PAD_OUT), max(0, y0 - _PAD_OUT)
             x1, y1 = min(w, x1 + _PAD_OUT), min(h, y1 + _PAD_OUT)
             crop = img.crop((x0, y0, x1, y1))
