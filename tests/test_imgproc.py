@@ -344,3 +344,21 @@ def test_프레임_없는_크롭의_모서리_컬러_콘텐츠는_보존된다()
     result = strip_chromatic_frame(img)
     arr = np.asarray(result.convert("RGB"), dtype=np.int16)
     assert np.any(np.all(arr == logo, axis=2)), "프레임 없는 크롭의 모서리 콘텐츠가 지워짐"
+
+
+def test_프레임_벗긴_뒤_초연분홍_잔여_링도_제거된다():
+    """실물 발견: 프레임 스트립 후 채도 ~10짜리 초연분홍 잔여 링이 남음
+    (채도 15 문턱 아래지만 육안엔 보임). 프레임을 벗긴 크롭은 잔여물
+    스윕으로 이것까지 제거해야 한다."""
+    size = 200
+    img = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, size - 1, size - 1), outline=(244, 234, 243), width=2)   # 초연분홍 잔여
+    draw.rectangle((2, 2, size - 3, size - 3), outline=(235, 218, 234), width=3)   # halo
+    draw.rectangle((5, 5, size - 6, size - 6), outline=(195, 144, 191), width=3)   # 프레임
+    draw.rectangle((60, 60, 139, 139), fill=(0, 0, 0))
+    result = strip_chromatic_frame(img)
+    arr = np.asarray(result.convert("RGB"), dtype=np.int16)
+    chroma = arr.max(axis=2) - arr.min(axis=2)
+    assert not np.any(chroma >= 8), "연분홍 잔여물이 남음"
+    assert _black_pixel_count(result) == 6400
