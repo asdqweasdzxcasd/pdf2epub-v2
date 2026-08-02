@@ -1,5 +1,5 @@
 """Mistral OCR 마크다운 인라인 표기 → XHTML 변환 테스트"""
-from app.pipeline.markdown_inline import parse_heading, to_xhtml
+from app.pipeline.markdown_inline import parse_heading, to_plain, to_xhtml
 
 # --- parse_heading ---
 
@@ -115,3 +115,27 @@ def test_따옴표_이스케이프():
 def test_헤딩접두사가_섞인_텍스트도_손실없이_보존():
     # to_xhtml은 heading 접두사를 모른다 -- 별도 처리 없이 그대로 이스케이프만
     assert to_xhtml("## 정적 자원") == "## 정적 자원"
+
+
+# --- to_plain: 마커만 제거, HTML 태그 생성 안 함 (목차 제목용) ---
+
+
+def test_to_plain_굵게_코드_각주_마커_제거():
+    assert to_plain("**굵게** `코드` $^{5}$") == "굵게 코드 5"
+
+
+def test_to_plain_기울임_마커_제거():
+    assert to_plain("*기울임*") == "기울임"
+
+
+def test_to_plain_html_태그_생성_안함():
+    assert "<" not in to_plain("**굵게**")
+    assert ">" not in to_plain("**굵게**")
+
+
+def test_to_plain_평문은_그대로():
+    assert to_plain("그냥 제목") == "그냥 제목"
+
+
+def test_to_plain_일반_달러표기는_달러만_제거():
+    assert to_plain("$x + y$") == "x + y"

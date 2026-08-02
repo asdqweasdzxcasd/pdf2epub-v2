@@ -1,12 +1,22 @@
 """PDF 북마크 / 휴리스틱 기반 목차 추출"""
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
 
+from app.pipeline.markdown_inline import to_plain
+
 logger = logging.getLogger(__name__)
+
+# 장 구분 페이지의 title: "3장" 처럼 숫자+장 만 단독으로 있는 heading.
+# "1장 시작"처럼 장 이름이 같은 블록에 붙어 있는 경우는 매칭하지 않는다
+# (그런 경우는 챕터 이름이 별도 heading 블록으로 오지 않으므로 폴백 경로가 처리한다).
+_CHAPTER_DIVIDER_RE = re.compile(r"^\s*\d+\s*장\s*$")
+
+_MAX_TITLE_LEN = 100
 
 
 @dataclass
@@ -99,15 +109,12 @@ def _extract_from_bookmarks(pdf_path: Path) -> list[TocEntry]:
 def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     """레이아웃 분석 결과에서 heading 블록을 목차로 변환한다.
 
-    Mistral OCR은 소제목도 title로 분류하므로 페이지당 첫 heading만
-    챕터 경계로 삼는다 — 그렇지 않으면 한 페이지 안의 소제목들까지
-    전부 TOC 항목이 되어 목차가 과도하게 파편화된다.
-
-    추가로 level이 0 또는 1인 heading만 목차 항목으로 채택한다 (level 0은
-    레벨 정보가 없는 V1 경로 호환, level 1은 최상위 챕터). level 2 이상
-    (마크다운 `##` 이하 소제목)은 본문에 <h2> 등으로만 남고 목차엔 들어가지
-    않는다. 페이지당 첫 heading이 level 2 이상이면 그 페이지는 목차 경계가
-    되지 못한다(그 페이지에 level 0/1 heading이 없다는 뜻이므로 건너뜀).
+    실제 전공책은 heading(title) 블록이 수백 개 나오지만 진짜 장 경계는
+    "3장" 처럼 숫자+장 단독 heading이 있는 구분 페이지뿐이다. 그런 장 구분
+    heading이 문서에 하나라도 있으면 그것만 챕터 경계로 삼는다
+    (`_extract_chapter_dividers`). 하나도 없으면 다른 책 형식이 깨지지
+    않도록 기존 폴백(페이지당 첫 heading, level ≤ 1)을 사용한다
+    (`_extract_fallback_headings`).
 
     duck typing 사용:
     - page_layouts: list[PageLayout]
@@ -117,16 +124,81 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     - Block.text: str
     - Block.level: int
     """
+    entries = _extract_chapter_dividers(page_layouts)
+    if entries:
+        return entries
+    return _extract_fallback_headings(page_layouts)
+
+
+def _extract_chapter_dividers(page_layouts: list) -> list[TocEntry]:
+    """"N장" 단독 heading을 챕터 경계로 삼아 목차를 만든다.
+
+    장 구분 페이지는 보통 장 번호("3장")와 장 이름("성능에 핵심인 DB")이
+    별개 heading 블록으로 온다. 장 번호 heading 다음에 오는 heading 블록의
+    텍스트를 이어붙여 "3장 성능에 핵심인 DB" 를 목차 제목으로 만든다
+    (다음 heading이 없으면 장 번호만 사용).
+
+    한 페이지에 장 구분 heading이 2개 이상이면(예: 앞부분 목차 페이지에
+    "1장","2장","3장"이 몰려 나오는 경우) 그 페이지는 목차 페이지로 보고
+    전부 무시한다.
+    """
+    entries: list[TocEntry] = []
+    for layout in page_layouts:
+        headings = [
+            (idx, block)
+            for idx, block in enumerate(layout.blocks)
+            if block.block_type.value == "heading" and block.text.strip()
+        ]
+        divider_positions = [
+            idx
+            for idx, block in headings
+            if _CHAPTER_DIVIDER_RE.match(block.text.strip())
+        ]
+        if len(divider_positions) != 1:
+            # 0개면 이 페이지엔 장 구분 없음, 2개 이상이면 목차 페이지 -> 무시
+            continue
+
+        divider_idx = divider_positions[0]
+        divider_text = layout.blocks[divider_idx].text.strip()
+
+        next_heading_text = None
+        for idx, block in headings:
+            if idx > divider_idx:
+                next_heading_text = block.text.strip()
+                break
+
+        title = f"{divider_text} {next_heading_text}" if next_heading_text else divider_text
+        entries.append(
+            TocEntry(
+                title=_clip_title(to_plain(title)),
+                page_num=layout.page_num,
+                level=1,
+            )
+        )
+
+    return entries
+
+
+def _extract_fallback_headings(page_layouts: list) -> list[TocEntry]:
+    """장 구분 heading이 없는 문서용 폴백: 페이지당 첫 heading을 챕터 경계로 삼는다.
+
+    Mistral OCR은 소제목도 title로 분류하므로 페이지당 첫 heading만
+    챕터 경계로 삼는다 — 그렇지 않으면 한 페이지 안의 소제목들까지
+    전부 TOC 항목이 되어 목차가 과도하게 파편화된다.
+
+    추가로 level이 0 또는 1인 heading만 목차 항목으로 채택한다 (level 0은
+    레벨 정보가 없는 V1 경로 호환, level 1은 최상위 챕터). level 2 이상
+    (마크다운 `##` 이하 소제목)은 본문에 <h2> 등으로만 남고 목차엔 들어가지
+    않는다. 페이지당 첫 heading이 level 2 이상이면 그 페이지는 목차 경계가
+    되지 못한다(그 페이지에 level 0/1 heading이 없다는 뜻이므로 건너뜀).
+    """
     entries = []
     for layout in page_layouts:
         for block in layout.blocks:
             if block.block_type.value == "heading" and block.text.strip():
                 if block.level not in (0, 1):
                     break  # 페이지당 첫 heading이 소제목 -> 이 페이지는 목차 경계 아님
-                text = block.text.strip()
-                # 너무 긴 heading은 잘라낸다
-                if len(text) > 100:
-                    text = text[:97] + "..."
+                text = _clip_title(to_plain(block.text.strip()))
                 entries.append(
                     TocEntry(
                         title=text,
@@ -137,3 +209,10 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
                 break  # 페이지당 첫 heading만 채택, 나머지는 건너뜀
 
     return entries
+
+
+def _clip_title(text: str) -> str:
+    """너무 긴 목차 제목은 잘라낸다."""
+    if len(text) > _MAX_TITLE_LEN:
+        return text[: _MAX_TITLE_LEN - 3] + "..."
+    return text

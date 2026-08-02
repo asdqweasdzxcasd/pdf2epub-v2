@@ -17,6 +17,10 @@ _LIST_MARKER_RE = re.compile(r"^(\d+[.)]|[-*+•])\s+")
 # 코드 펜스 줄 (``` 또는 ```lang)
 _CODE_FENCE_LINE_RE = re.compile(r"^```\S*$")
 
+# 라틴 문자 1~2자뿐인 제목 (OCR 오인식 메모 박스 라벨 등, 예: "B").
+# 단어 블랙리스트는 만들지 않는다 -- 길이/문자셋 기준만으로 오탐 위험을 낮춘다.
+_NOISE_HEADING_RE = re.compile(r"^[A-Za-z]{1,2}$")
+
 
 def build_epub(
     page_layouts: list,
@@ -262,7 +266,7 @@ def _build_chapter_html(
     """챕터의 XHTML 컨텐츠를 생성한다.
 
     block_type별 변환 규칙:
-    - heading → <h1>
+    - heading → <h1> (단, 라틴 문자 1~2자뿐인 잡음 제목은 <p>로 강등)
     - paragraph → <p> (줄바꿈 단위로 분리)
     - list_item → 같은 페이지에서 연속된 LIST_ITEM들을 하나의 <ul>/<ol>로 묶는다
       (번호 마커로 시작하면 <ol>, 아니면 <ul>). 항목 텍스트의 마크다운 목록
@@ -302,8 +306,13 @@ def _build_chapter_html(
             if bt == "heading":
                 text = block.text.strip() if block.text else ""
                 if text:
-                    tag = _heading_tag(getattr(block, "level", 0))
-                    parts.append(f"<{tag}>{to_xhtml(text)}</{tag}>")
+                    if _NOISE_HEADING_RE.match(text):
+                        # 라틴 1~2자뿐인 제목(OCR 오인식 메모 라벨 등)은
+                        # 본문에서 <h1>로 크게 나오면 보기 나쁘므로 일반 문단으로 강등
+                        parts.append(f"<p>{to_xhtml(text)}</p>")
+                    else:
+                        tag = _heading_tag(getattr(block, "level", 0))
+                        parts.append(f"<{tag}>{to_xhtml(text)}</{tag}>")
 
             elif bt == "paragraph":
                 text = block.text.strip() if block.text else ""

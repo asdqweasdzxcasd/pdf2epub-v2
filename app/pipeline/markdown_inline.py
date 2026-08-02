@@ -7,6 +7,8 @@ Mistral OCR은 블록 content를 마크다운으로 반환한다 (`## 제목`, `
 - parse_heading: 헤딩 접두사(`#`~`######`)를 레벨과 본문으로 분리
 - to_xhtml: 본문 텍스트의 인라인 마크다운을 HTML 태그로 변환 (HTML 특수문자
   이스케이프 포함)
+- to_plain: 인라인 마크다운 마커만 제거하고 순수 텍스트를 반환 (HTML 태그
+  생성 없음, 목차 제목처럼 태그 없는 평문이 필요한 곳에 사용)
 """
 
 import re
@@ -67,3 +69,23 @@ def to_xhtml(text: str) -> str:
     escaped = _ITALIC_RE.sub(r"<em>\1</em>", escaped)
 
     return escaped
+
+
+def to_plain(text: str) -> str:
+    """마크다운 인라인 마커(`**`, `*`, 백틱, `$...$`)만 제거한 순수 텍스트를 반환한다.
+
+    to_xhtml과 달리 HTML 태그를 생성하지 않고 HTML 이스케이프도 하지 않는다
+    (목차 제목처럼 태그 없는 평문이 필요한 곳에서 사용).
+    """
+    plain = text
+
+    plain = _SUP_BRACED_RE.sub(r"\1", plain)
+    plain = _SUP_PLAIN_RE.sub(r"\1", plain)
+    plain = _SUB_BRACED_RE.sub(r"\1", plain)
+    plain = _DOLLAR_RE.sub(r"\1", plain)
+
+    plain = _CODE_RE.sub(r"\1", plain)
+    plain = _BOLD_RE.sub(r"\1", plain)
+    plain = _ITALIC_RE.sub(r"\1", plain)
+
+    return plain
