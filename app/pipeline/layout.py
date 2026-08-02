@@ -26,6 +26,8 @@ class BlockType(str, Enum):
     PAGE_HEADER = "page_header"
     PAGE_FOOTER = "page_footer"
     LIST_ITEM = "list_item"
+    CODE = "code"
+    ASIDE = "aside"
 
 
 @dataclass

@@ -19,8 +19,8 @@ def test_map_block_type_전체_매핑():
     assert map_block_type("references") is BlockType.FOOTNOTE
     assert map_block_type("header") is BlockType.PAGE_HEADER
     assert map_block_type("footer") is BlockType.PAGE_FOOTER
-    assert map_block_type("code") is BlockType.PARAGRAPH
-    assert map_block_type("aside_text") is BlockType.PARAGRAPH
+    assert map_block_type("code") is BlockType.CODE
+    assert map_block_type("aside_text") is BlockType.ASIDE
     assert map_block_type("signature") is BlockType.FIGURE
     # 미지의 타입은 PARAGRAPH로 폴백 (API가 타입을 추가해도 죽지 않게)
     assert map_block_type("something_new") is BlockType.PARAGRAPH

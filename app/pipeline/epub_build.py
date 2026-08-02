@@ -1,6 +1,7 @@
 """ebooklib 기반 EPUB3 조립"""
 
 import logging
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,6 +10,12 @@ from ebooklib import epub
 from app.pipeline.markdown_inline import to_xhtml
 
 logger = logging.getLogger(__name__)
+
+# 목록 항목 줄머리 마커: "- ", "* ", "+ ", "• ", "1. ", "1) " 등
+_LIST_MARKER_RE = re.compile(r"^(\d+[.)]|[-*+•])\s+")
+
+# 코드 펜스 줄 (``` 또는 ```lang)
+_CODE_FENCE_LINE_RE = re.compile(r"^```\S*$")
 
 
 def build_epub(
@@ -72,7 +79,10 @@ def build_epub(
         )
 
         # 빈 챕터 방지 (ebooklib이 빈 body를 파싱하지 못함)
-        if not any(tag in html_content for tag in ("<h1>", "<p>", "<div", "<img")):
+        if not any(
+            tag in html_content
+            for tag in ("<h1>", "<p>", "<div", "<img", "<pre", "<ul", "<ol", "<aside")
+        ):
             html_content = html_content.replace(
                 "</body>",
                 f"<p>{_escape_html(chapter_title)}</p>\n</body>",
@@ -135,6 +145,17 @@ figcaption { font-size: 0.9em; color: #555; font-style: italic; margin-top: 0.3e
 table { border-collapse: collapse; margin: 1em auto; font-size: 0.9em; }
 th, td { border: 1px solid #999; padding: 0.3em 0.6em; }
 th { background: #eee; }
+pre { background: rgba(0, 0, 0, 0.04); padding: 0.8em; border-radius: 4px;
+      overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;
+      font-family: monospace; line-height: 1.4; }
+code { font-family: monospace; background: rgba(0, 0, 0, 0.04);
+       padding: 0.1em 0.3em; border-radius: 3px; }
+pre code { background: none; padding: 0; }
+aside.memo { background: rgba(0, 0, 0, 0.04); border-left: 3px solid currentColor;
+             padding: 0.6em 1em; margin: 1em 0; }
+aside.memo p { text-indent: 0; }
+ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
+li { margin: 0.3em 0; }
 """
     return epub.EpubItem(
         uid="style",
@@ -243,7 +264,12 @@ def _build_chapter_html(
     block_type별 변환 규칙:
     - heading → <h1>
     - paragraph → <p> (줄바꿈 단위로 분리)
-    - list_item → <p> 앞에 불릿 추가
+    - list_item → 같은 페이지에서 연속된 LIST_ITEM들을 하나의 <ul>/<ol>로 묶는다
+      (번호 마커로 시작하면 <ol>, 아니면 <ul>). 항목 텍스트의 마크다운 목록
+      마커(-, *, +, •, 1., 1) 등)는 제거하고 to_xhtml 적용
+    - code → <pre><code> (내부는 이스케이프만 하고 인라인 마크다운 변환은
+      하지 않는다. 앞뒤 코드 펜스(```)가 있으면 제거하고 줄바꿈은 보존)
+    - aside → <aside class="memo"> 안에 본문처럼 <p> (to_xhtml 적용)
     - figure(이미지 있음) + 인접 caption → <figure><img/><figcaption> 병합
       (같은 PageLayout 안에서 FIGURE 바로 다음이 CAPTION이거나, CAPTION 바로
       다음이 FIGURE인 경우만 병합. 페이지 경계를 넘는 병합은 하지 않음)
@@ -289,11 +315,53 @@ def _build_chapter_html(
                             parts.append(f"<p>{to_xhtml(line)}</p>")
 
             elif bt == "list_item":
+                # 연속된 LIST_ITEM 블록들을 하나의 <ul>/<ol>로 묶는다.
+                # 중간에 다른 타입이 오면 목록이 끝난다.
+                j = i
+                items: list[str] = []
+                ordered = False
+                marker_seen = False
+                while j < n and _block_type_str(blocks[j]) == "list_item":
+                    raw_text = blocks[j].text or ""
+                    for raw_line in raw_text.split("\n"):
+                        raw_line = raw_line.strip()
+                        if not raw_line:
+                            continue
+                        item_text, is_numbered = _strip_list_marker(raw_line)
+                        if not marker_seen:
+                            ordered = is_numbered
+                            marker_seen = True
+                        if item_text:
+                            items.append(item_text)
+                    j += 1
+
+                if items:
+                    tag = "ol" if ordered else "ul"
+                    parts.append(f"<{tag}>")
+                    for item in items:
+                        parts.append(f"<li>{to_xhtml(item)}</li>")
+                    parts.append(f"</{tag}>")
+
+                i = j
+                continue
+
+            elif bt == "code":
+                text = block.text if block.text else ""
+                if text.strip():
+                    parts.append(_code_html(text))
+
+            elif bt == "aside":
                 text = block.text.strip() if block.text else ""
                 if text:
-                    parts.append(
-                        f"<p>* {to_xhtml(text)}</p>"
-                    )
+                    inner_parts = [
+                        f"<p>{to_xhtml(line.strip())}</p>"
+                        for line in text.split("\n")
+                        if line.strip()
+                    ]
+                    if inner_parts:
+                        parts.append('<aside class="memo">')
+                        parts.extend(inner_parts)
+                        parts.append("</aside>")
 
             elif bt == "figure" and block.image_path:
                 next_block = blocks[i + 1] if i + 1 < n else None
@@ -368,6 +436,42 @@ def _block_type_str(block) -> str:
         if hasattr(block.block_type, "value")
         else str(block.block_type)
     )
+
+
+def _strip_list_marker(line: str) -> tuple[str, bool]:
+    """목록 항목 줄머리 마커를 제거한다.
+
+    Returns:
+        (마커를 제거한 텍스트, 번호 마커였는지 여부)
+    """
+    match = _LIST_MARKER_RE.match(line)
+    if not match:
+        return line, False
+    marker = match.group(1)
+    is_numbered = marker[0].isdigit()
+    return line[match.end():].strip(), is_numbered
+
+
+def _code_html(text: str) -> str:
+    """CODE 블록을 <pre><code>로 렌더링한다.
+
+    인라인 마크다운 변환은 하지 않고 HTML 특수문자만 이스케이프한다
+    (코드 안의 `**` 등이 문법일 수 있어 강조로 오변환되면 안 됨).
+    Mistral이 ```lang ... ``` 펜스로 감싸는 경우 앞뒤 펜스 줄을 제거한다.
+    줄바꿈은 그대로 보존한다.
+    """
+    content = _strip_code_fence(text.strip("\n"))
+    return f"<pre><code>{_escape_html(content)}</code></pre>"
+
+
+def _strip_code_fence(text: str) -> str:
+    """코드 블록 앞뒤의 마크다운 펜스(``` 또는 ```lang) 줄을 제거한다."""
+    lines = text.split("\n")
+    if lines and _CODE_FENCE_LINE_RE.match(lines[0].strip()):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines)
 
 
 def _figure_html(image_path: str, caption_text: str = "") -> str:
