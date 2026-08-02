@@ -116,6 +116,13 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     않도록 기존 폴백(페이지당 첫 heading, level ≤ 1)을 사용한다
     (`_extract_fallback_headings`).
 
+    주의: "장 구분 후보가 존재했는가"(has_candidates)와 "유효 항목이
+    남았는가"(entries)는 서로 다른 질문이다. 장 구분 heading이 문서에
+    있었지만 전부 목차 페이지(한 페이지에 2개 이상 몰림)라서 걸러졌다면
+    entries는 비어있어도 has_candidates는 True다. 이 경우 폴백으로
+    넘어가면 방금 무시하려던 그 목차 페이지들이 폴백(페이지당 첫 heading)
+    에 의해 다시 챕터로 들어오므로, 폴백을 쓰지 말고 빈 목차를 반환한다.
+
     duck typing 사용:
     - page_layouts: list[PageLayout]
       - PageLayout.page_num: int
@@ -124,13 +131,13 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     - Block.text: str
     - Block.level: int
     """
-    entries = _extract_chapter_dividers(page_layouts)
-    if entries:
+    has_candidates, entries = _extract_chapter_dividers(page_layouts)
+    if has_candidates:
         return entries
     return _extract_fallback_headings(page_layouts)
 
 
-def _extract_chapter_dividers(page_layouts: list) -> list[TocEntry]:
+def _extract_chapter_dividers(page_layouts: list) -> tuple[bool, list[TocEntry]]:
     """"N장" 단독 heading을 챕터 경계로 삼아 목차를 만든다.
 
     장 구분 페이지는 보통 장 번호("3장")와 장 이름("성능에 핵심인 DB")이
@@ -140,9 +147,17 @@ def _extract_chapter_dividers(page_layouts: list) -> list[TocEntry]:
 
     한 페이지에 장 구분 heading이 2개 이상이면(예: 앞부분 목차 페이지에
     "1장","2장","3장"이 몰려 나오는 경우) 그 페이지는 목차 페이지로 보고
-    전부 무시한다.
+    전부 무시한다. 다만 그런 페이지도 "장 구분 후보가 있었다"는 사실
+    자체는 has_candidates로 별도 반환한다 -- 호출부가 폴백 오발동을
+    막는 데 쓴다.
+
+    Returns:
+        (has_candidates, entries): has_candidates는 문서 어딘가에 "N장"
+        형태 heading이 하나라도 있었는지 (그 페이지가 목차 페이지로
+        걸러졌더라도 True). entries는 실제로 채택된 목차 항목.
     """
     entries: list[TocEntry] = []
+    has_candidates = False
     for layout in page_layouts:
         headings = [
             (idx, block)
@@ -154,10 +169,15 @@ def _extract_chapter_dividers(page_layouts: list) -> list[TocEntry]:
             for idx, block in headings
             if _CHAPTER_DIVIDER_RE.match(block.text.strip())
         ]
+        if not divider_positions:
+            # 이 페이지엔 장 구분 후보 없음
+            continue
         if len(divider_positions) != 1:
-            # 0개면 이 페이지엔 장 구분 없음, 2개 이상이면 목차 페이지 -> 무시
+            # 2개 이상이면 목차 페이지 -> 항목은 무시하지만 후보는 있었다고 기록
+            has_candidates = True
             continue
 
+        has_candidates = True
         divider_idx = divider_positions[0]
         divider_text = layout.blocks[divider_idx].text.strip()
 
@@ -176,7 +196,7 @@ def _extract_chapter_dividers(page_layouts: list) -> list[TocEntry]:
             )
         )
 
-    return entries
+    return has_candidates, entries
 
 
 def _extract_fallback_headings(page_layouts: list) -> list[TocEntry]:

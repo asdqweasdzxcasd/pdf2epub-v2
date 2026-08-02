@@ -97,3 +97,20 @@ def test_paragraph_블록은_next_heading_탐색에서_건너뛴다():
     ]
     toc = _extract_from_headings(layouts)
     assert [(e.title, e.page_num) for e in toc] == [("3장 성능에 핵심인 DB", 0)]
+
+
+def test_장구분_후보가_전부_목차페이지면_폴백을_쓰지않고_빈목차():
+    """장 구분(N장) heading이 문서에 있긴 했지만 전부 한 페이지(목차 페이지)에
+    몰려있어서 걸러지면(유효 항목 0개), 그 목차 페이지들이 폴백(페이지당 첫
+    heading)으로 다시 챕터가 되어서는 안 된다. 이 경우 빈 목차(단일 본문)로
+    처리해야 한다 -- '장 구분 후보가 있었는가'와 '유효 항목이 남았는가'를
+    따로 추적해야 폴백 오발동을 막을 수 있다."""
+    layouts = [
+        PageLayout(
+            page_num=1,
+            blocks=[_heading("1장"), _heading("2장"), _heading("3장")],
+        ),
+        PageLayout(page_num=5, blocks=[_heading("본문 시작")]),
+    ]
+    toc = _extract_from_headings(layouts)
+    assert toc == []

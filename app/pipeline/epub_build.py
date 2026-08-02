@@ -12,14 +12,21 @@ from app.pipeline.markdown_inline import to_xhtml
 logger = logging.getLogger(__name__)
 
 # 목록 항목 줄머리 마커: "- ", "* ", "+ ", "• ", "1. ", "1) " 등
-_LIST_MARKER_RE = re.compile(r"^(\d+[.)]|[-*+•])\s+")
+# 번호 마커는 숫자를 그룹 1로 캡처해 <ol start="N">에 쓴다.
+_LIST_MARKER_RE = re.compile(r"^(?:(\d+)[.)]|[-*+•])\s+")
 
 # 코드 펜스 줄 (``` 또는 ```lang)
 _CODE_FENCE_LINE_RE = re.compile(r"^```\S*$")
 
-# 라틴 문자 1~2자뿐인 제목 (OCR 오인식 메모 박스 라벨 등, 예: "B").
-# 단어 블랙리스트는 만들지 않는다 -- 길이/문자셋 기준만으로 오탐 위험을 낮춘다.
-_NOISE_HEADING_RE = re.compile(r"^[A-Za-z]{1,2}$")
+# 짧은 heading(라틴 1~2자 등)을 문단으로 강등하는 규칙은 두지 않는다.
+#
+# 이전에는 "^[A-Za-z]{1,2}$" 로 라틴 1~2자 heading을 전부 <p>로 강등했으나,
+# "AI", "US", "Go" 같은 2글자 제목과 "R", "C" 같은 1글자 제목(프로그래밍
+# 언어명 등)까지 함께 강등되는 오탐이 있었다. 1글자만 강등하도록 좁혀도
+# "R", "C" 오탐은 그대로 남는다 -- 길이/문자셋만으로는 OCR 잡음 라벨과
+# 정당한 짧은 제목을 구별할 방법이 없다. 정당한 제목을 잃는 비용이 잡음
+# heading을 그대로 두는 비용보다 크므로, 강등 자체를 제거하고 짧은
+# heading도 다른 heading과 동일하게 <h*>로 렌더링한다.
 
 # EPUB 기본 스타일시트.
 #
@@ -456,13 +463,17 @@ def _build_chapter_html(
     """챕터의 XHTML 컨텐츠를 생성한다.
 
     block_type별 변환 규칙:
-    - heading → <h1> (단, 라틴 문자 1~2자뿐인 잡음 제목은 <p>로 강등)
+    - heading → <h1>/<h2>/<h3> (level 기준. 짧은 제목이라고 강등하지 않음 -
+      이유는 _NOISE_HEADING_RE 자리의 주석 참고)
     - paragraph → <p> (줄바꿈 단위로 분리)
-    - list_item → 같은 페이지에서 연속된 LIST_ITEM들을 하나의 <ul>/<ol>로 묶는다
-      (번호 마커로 시작하면 <ol>, 아니면 <ul>). 항목 텍스트의 마크다운 목록
-      마커(-, *, +, •, 1., 1) 등)는 제거하고 to_xhtml 적용
+    - list_item → 같은 페이지에서 연속된 LIST_ITEM들을 목록으로 묶는다.
+      마커 종류(불릿 vs 번호)가 바뀌는 지점에서 목록을 분리한다 (합치지
+      않음). 번호 목록은 첫 항목의 마커 숫자를 <ol start="N">으로 보존한다
+      (N이 1이면 start 속성 생략). 항목 텍스트의 마크다운 목록 마커
+      (-, *, +, •, 1., 1) 등)는 제거하고 to_xhtml 적용
     - code → <pre><code> (내부는 이스케이프만 하고 인라인 마크다운 변환은
-      하지 않는다. 앞뒤 코드 펜스(```)가 있으면 제거하고 줄바꿈은 보존)
+      하지 않는다. 여는/닫는 코드 펜스(```)가 짝을 이룰 때만 제거하고
+      줄바꿈은 보존)
     - aside → <aside class="memo"> 안에 본문처럼 <p> (to_xhtml 적용)
     - figure(이미지 있음) + 인접 caption → <figure><img/><figcaption> 병합
       (같은 PageLayout 안에서 FIGURE 바로 다음이 CAPTION이거나, CAPTION 바로
@@ -497,13 +508,8 @@ def _build_chapter_html(
             if bt == "heading":
                 text = block.text.strip() if block.text else ""
                 if text:
-                    if _NOISE_HEADING_RE.match(text):
-                        # 라틴 1~2자뿐인 제목(OCR 오인식 메모 라벨 등)은
-                        # 본문에서 <h1>로 크게 나오면 보기 나쁘므로 일반 문단으로 강등
-                        parts.append(f"<p>{to_xhtml(text)}</p>")
-                    else:
-                        tag = _heading_tag(getattr(block, "level", 0))
-                        parts.append(f"<{tag}>{to_xhtml(text)}</{tag}>")
+                    tag = _heading_tag(getattr(block, "level", 0))
+                    parts.append(f"<{tag}>{to_xhtml(text)}</{tag}>")
 
             elif bt == "paragraph":
                 text = block.text.strip() if block.text else ""
@@ -518,27 +524,27 @@ def _build_chapter_html(
                 # 연속된 LIST_ITEM 블록들을 하나의 <ul>/<ol>로 묶는다.
                 # 중간에 다른 타입이 오면 목록이 끝난다.
                 j = i
-                items: list[str] = []
-                ordered = False
-                marker_seen = False
+                flat_items: list[tuple[str, bool, int | None]] = []
                 while j < n and _block_type_str(blocks[j]) == "list_item":
                     raw_text = blocks[j].text or ""
                     for raw_line in raw_text.split("\n"):
                         raw_line = raw_line.strip()
                         if not raw_line:
                             continue
-                        item_text, is_numbered = _strip_list_marker(raw_line)
-                        if not marker_seen:
-                            ordered = is_numbered
-                            marker_seen = True
+                        item_text, is_numbered, marker_num = _strip_list_marker(
+                            raw_line
+                        )
                         if item_text:
-                            items.append(item_text)
+                            flat_items.append((item_text, is_numbered, marker_num))
                     j += 1
 
-                if items:
+                for ordered, start_num, run_items in _group_list_runs(flat_items):
                     tag = "ol" if ordered else "ul"
-                    parts.append(f"<{tag}>")
-                    for item in items:
+                    if tag == "ol" and start_num not in (None, 1):
+                        parts.append(f'<{tag} start="{start_num}">')
+                    else:
+                        parts.append(f"<{tag}>")
+                    for item in run_items:
                         parts.append(f"<li>{to_xhtml(item)}</li>")
                     parts.append(f"</{tag}>")
 
@@ -638,18 +644,59 @@ def _block_type_str(block) -> str:
     )
 
 
-def _strip_list_marker(line: str) -> tuple[str, bool]:
+def _strip_list_marker(line: str) -> tuple[str, bool, int | None]:
     """목록 항목 줄머리 마커를 제거한다.
 
     Returns:
-        (마커를 제거한 텍스트, 번호 마커였는지 여부)
+        (마커를 제거한 텍스트, 번호 마커였는지 여부, 번호 마커의 숫자
+        (번호 마커가 아니면 None))
     """
     match = _LIST_MARKER_RE.match(line)
     if not match:
-        return line, False
-    marker = match.group(1)
-    is_numbered = marker[0].isdigit()
-    return line[match.end():].strip(), is_numbered
+        return line, False, None
+    digits = match.group(1)
+    is_numbered = digits is not None
+    marker_num = int(digits) if is_numbered else None
+    return line[match.end():].strip(), is_numbered, marker_num
+
+
+def _group_list_runs(
+    flat_items: list[tuple[str, bool, int | None]],
+) -> list[tuple[bool, int | None, list[str]]]:
+    """마커 종류(불릿 vs 번호)가 바뀌는 지점마다 목록을 나눈다.
+
+    "- a", "- b", "1. c", "2. d"처럼 불릿 목록 다음에 번호 목록이 바로
+    이어지는 경우, 둘을 하나의 <ul>/<ol>로 합치면 목록 종류가 뒤섞인다.
+    연속된 항목을 마커 종류가 같은 구간(run)으로 나눠 각 구간을 별도
+    목록으로 렌더링한다.
+
+    Args:
+        flat_items: [(항목 텍스트, 번호 마커 여부, 마커 숫자), ...]
+                    (블록/줄 경계는 이미 펼쳐진 상태)
+
+    Returns:
+        [(ordered, start_num, [항목 텍스트, ...]), ...]
+        - ordered: 번호 목록이면 True
+        - start_num: 번호 목록의 첫 항목 마커 숫자 (불릿 목록이면 None)
+    """
+    runs: list[tuple[bool, int | None, list[str]]] = []
+    current_ordered: bool | None = None
+    current_start: int | None = None
+    current_items: list[str] = []
+
+    for item_text, is_numbered, marker_num in flat_items:
+        if current_ordered is None or is_numbered != current_ordered:
+            if current_items:
+                runs.append((current_ordered, current_start, current_items))
+            current_ordered = is_numbered
+            current_start = marker_num if is_numbered else None
+            current_items = []
+        current_items.append(item_text)
+
+    if current_items:
+        runs.append((current_ordered, current_start, current_items))
+
+    return runs
 
 
 def _code_html(text: str) -> str:
@@ -665,13 +712,20 @@ def _code_html(text: str) -> str:
 
 
 def _strip_code_fence(text: str) -> str:
-    """코드 블록 앞뒤의 마크다운 펜스(``` 또는 ```lang) 줄을 제거한다."""
+    """코드 블록 앞뒤의 마크다운 펜스(``` 또는 ```lang) 줄을 제거한다.
+
+    여는 펜스와 닫는 펜스가 짝을 이룰 때만 제거한다. 각각 독립적으로
+    제거하면 코드 첫/마지막 줄이 진짜 ``` 인 코드 블록(펜스가 한쪽만
+    있거나 아예 없는 경우)에서 그 줄이 조용히 사라진다.
+    """
     lines = text.split("\n")
-    if lines and _CODE_FENCE_LINE_RE.match(lines[0].strip()):
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines)
+    if len(lines) < 2:
+        return text
+    has_open = bool(_CODE_FENCE_LINE_RE.match(lines[0].strip()))
+    has_close = lines[-1].strip() == "```"
+    if has_open and has_close:
+        return "\n".join(lines[1:-1])
+    return text
 
 
 def _figure_html(image_path: str, caption_text: str = "") -> str:

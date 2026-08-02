@@ -39,33 +39,34 @@ def test_레벨3_헤딩은_h3():
     assert "<h3>소소제목</h3>" in html
 
 
-# --- 잡음 제목(라틴 1~2자) 강등 ---
+# --- 짧은 제목(라틴 1~2자) 강등 없음 ---
+#
+# 예전에는 라틴 1~2자뿐인 heading을 OCR 잡음 라벨로 보고 <p>로 강등했으나,
+# "AI", "US", "Go", "R", "C" 같은 정당한 짧은 제목까지 함께 강등되는 오탐이
+# 있었다 (자세한 근거는 app/pipeline/epub_build.py의 _NOISE_HEADING_RE 자리
+# 주석 참고). 강등 규칙 자체를 제거했으므로 길이와 무관하게 heading은 항상
+# <h*>로 렌더링된다.
 
 
-def test_라틴_1자_제목은_h1이_아니라_p로_렌더():
+def test_라틴_1자_제목은_h1로_유지된다():
     layout = PageLayout(page_num=0, blocks=[_block(BlockType.HEADING, "B", level=1)])
     html = _build_chapter_html([layout], "장", {})
-    assert "<h1>" not in html
-    assert "<p>B</p>" in html
+    assert "<h1>B</h1>" in html
 
 
-def test_라틴_2자_제목도_p로_렌더():
+def test_라틴_2자_제목도_h1로_유지된다():
     layout = PageLayout(page_num=0, blocks=[_block(BlockType.HEADING, "Ok", level=1)])
     html = _build_chapter_html([layout], "장", {})
-    assert "<h1>" not in html
-    assert "<p>Ok</p>" in html
+    assert "<h1>Ok</h1>" in html
 
 
 def test_라틴_3자_이상_제목은_그대로_heading_유지():
-    """단어 블랙리스트를 만들지 않으므로 'Note'처럼 의미 있어 보이는 짧은
-    영단어는 그대로 heading으로 남는다 (길이 기준만 사용)."""
     layout = PageLayout(page_num=0, blocks=[_block(BlockType.HEADING, "Note", level=1)])
     html = _build_chapter_html([layout], "장", {})
     assert "<h1>Note</h1>" in html
 
 
-def test_한글_1자_제목은_강등되지_않는다():
-    """잡음 강등은 라틴 문자에만 적용된다 -- 한글 짧은 제목까지 건드리지 않는다."""
+def test_한글_1자_제목도_강등되지_않는다():
     layout = PageLayout(page_num=0, blocks=[_block(BlockType.HEADING, "기", level=1)])
     html = _build_chapter_html([layout], "장", {})
     assert "<h1>기</h1>" in html
