@@ -175,6 +175,32 @@ th, td {
 th {
   background: rgba(0, 0, 0, 0.08);
 }
+/* 표 캡션 -- 조판 관례상 표 위에 오므로 caption-side: top. 그림 캡션보다
+   더 옅게 둬서 표 본문과 확실히 구분되게 한다. */
+table caption {
+  caption-side: top;
+  font-size: 0.85em;
+  text-align: center;
+  margin-bottom: 0.5em;
+  opacity: 0.75;
+}
+
+/* ============================================================
+   figure.listing -- 코드/리스팅 캡션. 그림과 달리 캡션이 코드 "위"에
+   오는 조판 관례를 따른다 (마크업 순서 자체가 figcaption -> pre).
+   ============================================================ */
+figure.listing {
+  margin: 1.5em 0;
+  page-break-inside: avoid;
+}
+figure.listing figcaption {
+  font-size: 0.85em;
+  margin-bottom: 0.5em;
+  opacity: 0.75;
+}
+figure.listing pre {
+  margin: 0;
+}
 
 /* ============================================================
    aside.memo -- 본문과 구별되는 박스 (옅은 배경 + 왼쪽 굵은 테두리)
@@ -478,8 +504,13 @@ def _build_chapter_html(
     - figure(이미지 있음) + 인접 caption → <figure><img/><figcaption> 병합
       (같은 PageLayout 안에서 FIGURE 바로 다음이 CAPTION이거나, CAPTION 바로
       다음이 FIGURE인 경우만 병합. 페이지 경계를 넘는 병합은 하지 않음)
+    - CAPTION 바로 다음이 TABLE(내용 있음) → 표 캡션으로 간주해 <table> 첫
+      자식으로 <caption>을 넣는다 (조판 관례상 표 캡션은 표 위에 옴)
+    - CAPTION 바로 다음이 CODE(내용 있음) → <figure class="listing">로 감싸
+      <figcaption>을 <pre> 앞에 둔다 (리스트/코드 캡션도 위에 옴)
     - 짝 없는 figure → <figure class="figure"><img/></figure>
-    - 짝 없는 caption → <p class="caption">
+    - 짝 없는 caption → <p class="caption"> (대상 블록이 없거나 내용이
+      비어 있으면 캡션 텍스트 유실을 막기 위해 이 폴백을 그대로 쓴다)
     - table/formula → 이미지가 있으면 <img>, 없으면 alt 텍스트
     - footnote → <div class="footnote">
     - page_header, page_footer → EPUB에서 제외
@@ -581,15 +612,8 @@ def _build_chapter_html(
                 parts.append(_figure_html(block.image_path))
 
             elif bt == "table":
-                if block.image_path:
-                    img_src = f"images/{block.image_path}"
-                    parts.append(
-                        f'<div class="table-img">'
-                        f'<img src="{img_src}" alt="표"/>'
-                        f"</div>"
-                    )
-                elif block.text and block.text.strip():
-                    parts.append(markdown_table_to_html(block.text))
+                if block.image_path or (block.text and block.text.strip()):
+                    parts.append(_table_html(block))
 
             elif bt == "formula" and block.image_path:
                 img_src = f"images/{block.image_path}"
@@ -601,19 +625,27 @@ def _build_chapter_html(
 
             elif bt == "caption":
                 next_block = blocks[i + 1] if i + 1 < n else None
-                if (
-                    next_block is not None
-                    and _block_type_str(next_block) == "figure"
-                    and next_block.image_path
-                ):
-                    caption_text = block.text.strip() if block.text else ""
+                next_bt = _block_type_str(next_block) if next_block is not None else ""
+                caption_text = block.text.strip() if block.text else ""
+
+                if next_bt == "figure" and next_block.image_path:
                     parts.append(_figure_html(next_block.image_path, caption_text))
                     i += 2
                     continue
-                text = block.text.strip() if block.text else ""
-                if text:
+
+                if next_bt == "table" and (next_block.image_path or (next_block.text and next_block.text.strip())):
+                    parts.append(_table_html(next_block, caption_text))
+                    i += 2
+                    continue
+
+                if next_bt == "code" and next_block.text and next_block.text.strip():
+                    parts.append(_listing_html(next_block.text, caption_text))
+                    i += 2
+                    continue
+
+                if caption_text:
                     parts.append(
-                        f'<p class="caption">{to_xhtml(text)}</p>'
+                        f'<p class="caption">{to_xhtml(caption_text)}</p>'
                     )
 
             elif bt == "footnote":
@@ -728,6 +760,35 @@ def _strip_code_fence(text: str) -> str:
     return text
 
 
+def _table_html(block, caption_text: str = "") -> str:
+    """TABLE 블록을 렌더링한다. caption_text가 있으면 <table> 첫 자식으로
+    <caption>을 넣는다 (HTML 표준 -- <caption>은 <table>의 direct child만
+    허용됨). caption이 없으면 기존 렌더링(이미지는 <div class="table-img">,
+    텍스트는 markdown_table_to_html)을 그대로 유지한다.
+    """
+    if block.image_path:
+        img_src = f"images/{block.image_path}"
+        if caption_text:
+            return (
+                f"<table><caption>{to_xhtml(caption_text)}</caption>"
+                f'<tr><td><img src="{img_src}" alt="표"/></td></tr></table>'
+            )
+        return f'<div class="table-img"><img src="{img_src}" alt="표"/></div>'
+    return markdown_table_to_html(block.text, caption_text)
+
+
+def _listing_html(code_text: str, caption_text: str) -> str:
+    """CODE 블록 + 앞선 CAPTION을 <figure class="listing">으로 감싼다.
+
+    책 조판 관례상 표/리스팅 캡션은 대상 블록 "위"에 오므로 figcaption을
+    <pre> 앞에 둔다 (그림 캡션과 반대 순서).
+    """
+    return (
+        f'<figure class="listing"><figcaption>{to_xhtml(caption_text)}</figcaption>'
+        f"{_code_html(code_text)}</figure>"
+    )
+
+
 def _figure_html(image_path: str, caption_text: str = "") -> str:
     """<figure> 마크업을 생성한다. caption_text가 있으면 <figcaption>을 함께 담는다."""
     img_src = f"images/{image_path}"
@@ -756,11 +817,12 @@ def _heading_tag(level: int) -> str:
     return _HEADING_TAGS[idx]
 
 
-def markdown_table_to_html(md: str) -> str:
+def markdown_table_to_html(md: str, caption_text: str = "") -> str:
     """마크다운 파이프 표를 HTML <table>로 변환한다.
 
     Mistral OCR이 표를 마크다운으로 반환하는 것에 대응. 파이프 표 형식이
-    아니면 <pre>로 폴백 (깨진 표라도 내용은 보존).
+    아니면 <pre>로 폴백 (깨진 표라도 내용은 보존). caption_text가 있으면
+    <table> 첫 자식으로 <caption>을 넣는다 (HTML 표준).
     """
     lines = [ln.strip() for ln in md.strip().split("\n") if ln.strip()]
     rows = [ln for ln in lines if ln.startswith("|")]
@@ -774,6 +836,8 @@ def markdown_table_to_html(md: str) -> str:
         return all(set(c) <= set("-: ") and c for c in cells(row))
 
     parts = ["<table>"]
+    if caption_text:
+        parts.append(f"<caption>{to_xhtml(caption_text)}</caption>")
     header_done = False
     for row in rows:
         if is_separator(row):
