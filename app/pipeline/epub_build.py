@@ -21,6 +21,224 @@ _CODE_FENCE_LINE_RE = re.compile(r"^```\S*$")
 # 단어 블랙리스트는 만들지 않는다 -- 길이/문자셋 기준만으로 오탐 위험을 낮춘다.
 _NOISE_HEADING_RE = re.compile(r"^[A-Za-z]{1,2}$")
 
+# EPUB 기본 스타일시트.
+#
+# 설계 원칙 (모두 지킬 것):
+# - body에 font-family를 지정하지 않는다 -- 리더에서 사용자가 고른 폰트/크기를
+#   덮어쓰지 않기 위함. 모노스페이스가 필요한 pre/code에만 지정한다.
+# - 길이 단위는 전부 em/rem/%만 쓴다 (px 금지) -- 사용자가 글자 크기를
+#   키워도 여백/테두리가 함께 커지도록.
+# - 배경/글자색은 하드코딩하지 않는다. currentColor + rgba 투명도 오버레이로
+#   최소한만 쓰고, 옅은 오버레이는 어두운 배경에서 안 보이므로 아래
+#   @media (prefers-color-scheme: dark) 블록에서 밝은 계열로 뒤집는다.
+# - 한국어 조판: line-height 1.7~1.8, word-break: keep-all(단어 중간 줄바꿈
+#   방지), overflow-wrap: break-word(긴 URL 등 대비).
+DEFAULT_CSS = """\
+/* ============================================================
+   전역 -- 본문 폰트는 리더 기본값을 그대로 쓴다 (font-family 지정 없음)
+   ============================================================ */
+body {
+  line-height: 1.75;
+  margin: 1em;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* ============================================================
+   제목 계층 -- h1(장) > h2(절) > h3(항)이 크기/여백으로 뚜렷이 구분되게.
+   제목이 페이지 중간에서 잘리지 않도록 page-break-after: avoid.
+   ============================================================ */
+h1, h2, h3 {
+  line-height: 1.3;
+  page-break-after: avoid;
+  word-break: keep-all;
+}
+
+h1 {
+  font-size: 1.7em;
+  margin: 2.2em 0 1em;
+}
+
+h2 {
+  font-size: 1.3em;
+  margin: 1.6em 0 0.8em;
+}
+
+h3 {
+  font-size: 1.1em;
+  margin: 1.2em 0 0.6em;
+}
+
+/* ============================================================
+   본문 문단 -- 한국어 책 관례상 "첫 줄 들여쓰기" 방식을 택한다.
+   들여쓰기와 문단 간 margin을 함께 쓰면 구분 표시가 중복돼 지저분해지므로
+   margin은 0으로 둔다 (여백 방식과 들여쓰기 방식 중 하나만 사용).
+   제목 바로 다음 첫 문단은 들여쓰지 않는다.
+   ============================================================ */
+p {
+  text-indent: 1em;
+  margin: 0;
+}
+
+h1 + p, h2 + p, h3 + p {
+  text-indent: 0;
+}
+
+/* ============================================================
+   figure/figcaption -- 그림은 가운데 정렬, 캡션은 작고 차분하게.
+   그림과 캡션이 페이지 경계에서 분리되지 않도록 page-break-inside: avoid.
+   ============================================================ */
+figure.figure {
+  text-align: center;
+  margin: 1.5em 0;
+  page-break-inside: avoid;
+}
+figure.figure img {
+  max-width: 100%;
+  height: auto;
+}
+figcaption {
+  font-size: 0.85em;
+  margin-top: 0.5em;
+  opacity: 0.75;
+}
+
+.table-img, .formula {
+  text-align: center;
+  margin: 1em 0;
+}
+.table-img img, .formula img {
+  max-width: 100%;
+  height: auto;
+}
+.formula img {
+  max-width: 80%;
+}
+.caption {
+  font-size: 0.85em;
+  text-align: center;
+  opacity: 0.75;
+}
+
+/* ============================================================
+   pre/code -- 리더에는 가로 스크롤이 없으므로 pre-wrap으로 줄바꿈한다.
+   코드 영역임을 옅은 배경 + 왼쪽 테두리로 표시. 모노스페이스는
+   여기에만 지정한다 (본문 폰트는 건드리지 않음).
+   ============================================================ */
+pre {
+  background: rgba(0, 0, 0, 0.05);
+  border-left: 0.25em solid currentColor;
+  padding: 0.8em 1em;
+  margin: 1em 0;
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+pre, code {
+  font-family: monospace;
+}
+code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.1em 0.3em;
+  border-radius: 0.2em;
+  font-size: 0.85em;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 1em;
+}
+
+/* ============================================================
+   table -- 헤더 구분, 셀 패딩, 표가 페이지 중간에서 잘리지 않게.
+   ============================================================ */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.2em 0;
+  font-size: 0.9em;
+  page-break-inside: avoid;
+}
+th, td {
+  border: 0.06em solid currentColor;
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+th {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+/* ============================================================
+   aside.memo -- 본문과 구별되는 박스 (옅은 배경 + 왼쪽 굵은 테두리)
+   ============================================================ */
+aside.memo {
+  background: rgba(0, 0, 0, 0.05);
+  border-left: 0.3em solid currentColor;
+  padding: 0.7em 1.1em;
+  margin: 1.2em 0;
+}
+aside.memo p {
+  text-indent: 0;
+}
+
+/* ============================================================
+   목록 -- 항목 간 여백과 들여쓰기
+   ============================================================ */
+ul, ol {
+  margin: 0.8em 0;
+  padding-left: 1.6em;
+}
+li {
+  margin: 0.4em 0;
+  line-height: 1.7;
+}
+
+/* ============================================================
+   위/아래 첨자 -- line-height: 0 트릭으로 줄 높이를 밀지 않게 한다.
+   ============================================================ */
+sup, sub {
+  font-size: 0.7em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+sup {
+  top: -0.5em;
+}
+sub {
+  bottom: -0.25em;
+}
+
+/* ============================================================
+   각주 -- 본문과 구분되게 작고, 위에 구분선.
+   ============================================================ */
+.footnote {
+  font-size: 0.85em;
+  border-top: 0.06em solid currentColor;
+  opacity: 0.85;
+  padding-top: 0.6em;
+  margin-top: 2em;
+}
+
+/* ============================================================
+   다크 모드 보정 -- 옅은 검정 오버레이는 어두운 배경에서 거의 안 보이므로
+   밝은 계열 오버레이로 뒤집는다. 글자색/배경 자체는 리더가 관리하므로
+   여기서는 건드리지 않는다.
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  pre, code {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  aside.memo {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  th {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+"""
+
 
 def build_epub(
     page_layouts: list,
@@ -133,39 +351,11 @@ def build_epub(
 
 def _create_default_css() -> epub.EpubItem:
     """EPUB용 기본 CSS를 생성한다."""
-    css_content = """\
-body { font-family: serif; line-height: 1.8; margin: 1em; }
-h1, h2, h3 { font-family: sans-serif; margin-top: 1.5em; }
-p { text-indent: 1em; margin: 0.5em 0; }
-figure.figure { text-align: center; margin: 1em 0; }
-figure.figure img { max-width: 100%; height: auto; }
-figcaption { font-size: 0.9em; color: #555; font-style: italic; margin-top: 0.3em; }
-.table-img { text-align: center; margin: 1em 0; }
-.table-img img { max-width: 100%; height: auto; }
-.formula { text-align: center; margin: 0.5em 0; }
-.formula img { max-width: 80%; height: auto; }
-.caption { font-size: 0.9em; color: #555; text-align: center; font-style: italic; }
-.footnote { font-size: 0.85em; color: #666; border-top: 1px solid #ccc; padding-top: 0.5em; margin-top: 2em; }
-table { border-collapse: collapse; margin: 1em auto; font-size: 0.9em; }
-th, td { border: 1px solid #999; padding: 0.3em 0.6em; }
-th { background: #eee; }
-pre { background: rgba(0, 0, 0, 0.04); padding: 0.8em; border-radius: 4px;
-      overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;
-      font-family: monospace; line-height: 1.4; }
-code { font-family: monospace; background: rgba(0, 0, 0, 0.04);
-       padding: 0.1em 0.3em; border-radius: 3px; }
-pre code { background: none; padding: 0; }
-aside.memo { background: rgba(0, 0, 0, 0.04); border-left: 3px solid currentColor;
-             padding: 0.6em 1em; margin: 1em 0; }
-aside.memo p { text-indent: 0; }
-ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
-li { margin: 0.3em 0; }
-"""
     return epub.EpubItem(
         uid="style",
         file_name="style/default.css",
         media_type="text/css",
-        content=css_content.encode("utf-8"),
+        content=DEFAULT_CSS.encode("utf-8"),
     )
 
 
@@ -287,7 +477,8 @@ def _build_chapter_html(
         '<?xml version="1.0" encoding="utf-8"?>',
         "<!DOCTYPE html>",
         '<html xmlns="http://www.w3.org/1999/xhtml" '
-        'xmlns:epub="http://www.idpf.org/2007/ops">',
+        'xmlns:epub="http://www.idpf.org/2007/ops" '
+        'lang="ko" xml:lang="ko">',
         "<head>",
         f"<title>{_escape_html(chapter_title)}</title>",
         '<link rel="stylesheet" type="text/css" href="style/default.css"/>',
