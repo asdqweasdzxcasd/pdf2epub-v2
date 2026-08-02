@@ -1,12 +1,13 @@
 """run_pipeline OCR API 분기 테스트 (API는 모킹)"""
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import fitz
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
-from app.pipeline.run import run_pipeline
+from app.pipeline.run import _fill_missing_pages, run_pipeline
 
 
 class _NullProgress:
@@ -254,6 +255,64 @@ def test_트림된_PDF에는_JPEG로_임베드되어_업로드_크기가_줄어�
         assert (pix.width, pix.height) == png_pixel_size
     finally:
         doc.close()
+
+
+def _make_blank_page_png(tmp_path, name="blank.png", size=(200, 300), color=(255, 255, 255)):
+    p = tmp_path / name
+    Image.new("RGB", size, color).save(p)
+    return p
+
+
+def _make_photo_page_png(tmp_path, name="photo.png", size=(200, 300)):
+    """그림 한 장이 있는 페이지 (단색 아님) — 챕터 백지와 구분되어야 한다."""
+    img = Image.new("RGB", size, (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((20, 20, 180, 180), fill=(200, 50, 30))
+    draw.rectangle((40, 200, 160, 280), fill=(30, 120, 200))
+    p = tmp_path / name
+    img.save(p)
+    return p
+
+
+def test_단색_백지_페이지는_레이아웃에서_제외된다(tmp_path):
+    """OCR 블록이 0개로 온 챕터 구분용 백지 페이지는 무의미한 이미지
+    임베드를 피하기 위해 결과 레이아웃에서 통째로 제외돼야 한다 (빈
+    PageLayout도 넣지 않음)."""
+    blank_png = _make_blank_page_png(tmp_path)
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=1, page_images=[blank_png])
+
+    result = _fill_missing_pages([], render_result, figures_dir)
+
+    assert result == []
+    assert list(figures_dir.iterdir()) == []
+
+
+def test_그림_페이지는_단색이_아니므로_유지된다(tmp_path):
+    """그림 한 장만 있는 페이지(사진 전면 페이지)는 단색이 아니므로 영향
+    없이 기존처럼 페이지 이미지로 보정돼야 한다."""
+    photo_png = _make_photo_page_png(tmp_path)
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=1, page_images=[photo_png])
+
+    result = _fill_missing_pages([], render_result, figures_dir)
+
+    assert len(result) == 1
+    assert result[0].blocks and result[0].blocks[0].image_path
+
+
+def test_일부만_단색인_경우_단색_페이지만_제외된다(tmp_path):
+    blank_png = _make_blank_page_png(tmp_path, "blank.png")
+    photo_png = _make_photo_page_png(tmp_path, "photo.png")
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=2, page_images=[blank_png, photo_png])
+
+    result = _fill_missing_pages([], render_result, figures_dir)
+
+    assert [layout.page_num for layout in result] == [1]
 
 
 def test_refine_실패가_전체_변환을_죽이지_않는다(tmp_path, monkeypatch):

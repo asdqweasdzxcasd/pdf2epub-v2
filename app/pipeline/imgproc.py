@@ -12,6 +12,7 @@ from PIL import Image
 _FRAME_WIDTH = 2  # 배경색 판정에 쓰는 바깥 프레임 두께(px)
 _DEFAULT_TOL = 12
 _DEFAULT_OCCUPANCY = 0.005
+_DEFAULT_BLANK_TOL = 8
 
 
 def _scan_rgb(img: Image.Image) -> np.ndarray:
@@ -31,6 +32,29 @@ def _scan_rgb(img: Image.Image) -> np.ndarray:
         white_bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
         scan_src = Image.alpha_composite(white_bg, rgba)
     return np.asarray(scan_src.convert("RGB"), dtype=np.int16)
+
+
+def is_blank_page(img: Image.Image, tol: int = _DEFAULT_BLANK_TOL) -> bool:
+    """페이지 이미지가 거의 단색(백지/챕터 구분용 색지 등)인지 판정한다.
+
+    챕터 구분용 백지 페이지는 OCR 블록 0개로 응답되기 쉬운데, 그 페이지
+    이미지를 그대로 EPUB에 임베드하면 무의미한 빈 이미지가 남는다 — 이를
+    걸러내기 위한 판정 헬퍼.
+
+    _scan_rgb로 얻은 RGB 배열의 채널별 표준편차 중 최댓값이 tol 미만이면
+    "거의 단색"으로 판정한다. 그림이 있는 페이지(사진 전면 페이지 등)는
+    색 분산이 커서 표준편차가 tol을 훌쩍 넘으므로 영향받지 않는다.
+
+    Args:
+        img: 판정할 페이지 이미지 (모드 무관 — RGB로 변환해 스캔)
+        tol: 단색으로 볼 채널 표준편차 상한
+
+    Returns:
+        거의 단색이면 True.
+    """
+    rgb = _scan_rgb(img).astype(np.float64)
+    std = float(rgb.reshape(-1, 3).std(axis=0).max())
+    return std < tol
 
 
 def _uniform_bbox(

@@ -103,17 +103,26 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     챕터 경계로 삼는다 — 그렇지 않으면 한 페이지 안의 소제목들까지
     전부 TOC 항목이 되어 목차가 과도하게 파편화된다.
 
+    추가로 level이 0 또는 1인 heading만 목차 항목으로 채택한다 (level 0은
+    레벨 정보가 없는 V1 경로 호환, level 1은 최상위 챕터). level 2 이상
+    (마크다운 `##` 이하 소제목)은 본문에 <h2> 등으로만 남고 목차엔 들어가지
+    않는다. 페이지당 첫 heading이 level 2 이상이면 그 페이지는 목차 경계가
+    되지 못한다(그 페이지에 level 0/1 heading이 없다는 뜻이므로 건너뜀).
+
     duck typing 사용:
     - page_layouts: list[PageLayout]
       - PageLayout.page_num: int
       - PageLayout.blocks: list[Block]
     - Block.block_type.value: str ("heading" 등)
     - Block.text: str
+    - Block.level: int
     """
     entries = []
     for layout in page_layouts:
         for block in layout.blocks:
             if block.block_type.value == "heading" and block.text.strip():
+                if block.level not in (0, 1):
+                    break  # 페이지당 첫 heading이 소제목 -> 이 페이지는 목차 경계 아님
                 text = block.text.strip()
                 # 너무 긴 heading은 잘라낸다
                 if len(text) > 100:
@@ -122,7 +131,7 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
                     TocEntry(
                         title=text,
                         page_num=layout.page_num,
-                        level=1,
+                        level=block.level or 1,
                     )
                 )
                 break  # 페이지당 첫 heading만 채택, 나머지는 건너뜀

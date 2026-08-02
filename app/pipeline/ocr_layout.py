@@ -12,6 +12,7 @@ from PIL import Image
 
 from app.pipeline.imgproc import strip_chromatic_frame
 from app.pipeline.layout import Block, BlockType, PageLayout
+from app.pipeline.markdown_inline import parse_heading
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +110,12 @@ def build_layouts_from_ocr(
                 )
             except (KeyError, TypeError, ValueError):
                 bbox = (0.0, 0.0, 0.0, 0.0)
+            level = 0
+            if btype is BlockType.HEADING:
+                level, content = parse_heading(content)
             blocks.append(Block(
                 block_type=btype, bbox=bbox, confidence=1.0, text=content,
+                level=level,
             ))
         layouts.append(PageLayout(page_num=page_num, blocks=blocks))
 

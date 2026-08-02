@@ -2,7 +2,7 @@
 import numpy as np
 from PIL import Image, ImageDraw
 
-from app.pipeline.imgproc import strip_chromatic_frame, trim_uniform_margins
+from app.pipeline.imgproc import is_blank_page, strip_chromatic_frame, trim_uniform_margins
 
 
 def _make_margin_image(bg=(255, 255, 255), fg=(0, 0, 0), size=200, box=(50, 50, 149, 149)):
@@ -362,3 +362,54 @@ def test_프레임_벗긴_뒤_초연분홍_잔여_링도_제거된다():
     chroma = arr.max(axis=2) - arr.min(axis=2)
     assert not np.any(chroma >= 8), "연분홍 잔여물이 남음"
     assert _black_pixel_count(result) == 6400
+
+
+# --- is_blank_page ---
+
+
+def test_순수_단색_페이지는_blank로_판정된다():
+    img = Image.new("RGB", (300, 400), (255, 255, 255))
+    assert is_blank_page(img) is True
+
+
+def test_어두운_단색_페이지도_blank로_판정된다():
+    img = Image.new("RGB", (300, 400), (20, 30, 60))
+    assert is_blank_page(img) is True
+
+
+def test_약한_스캔_노이즈가_섞인_단색_페이지도_blank():
+    rng = np.random.default_rng(0)
+    arr = np.full((300, 400, 3), 230, dtype=np.int16)
+    noise = rng.integers(-3, 4, size=arr.shape)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+    img = Image.fromarray(arr, mode="RGB")
+    assert is_blank_page(img) is True
+
+
+def test_사진_전면_페이지는_blank가_아니다():
+    """그림 한 장만 있는 페이지(사진 전면 페이지)는 단색이 아니므로 영향 없어야 한다."""
+    img = _make_margin_image(bg=(255, 255, 255), fg=(20, 20, 20), size=300,
+                              box=(0, 0, 299, 299))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((50, 50, 250, 250), fill=(200, 50, 30))
+    draw.rectangle((80, 80, 220, 220), fill=(30, 120, 200))
+    assert is_blank_page(img) is False
+
+
+def test_텍스트가_있는_페이지는_blank가_아니다():
+    img = Image.new("RGB", (300, 400), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    for y in range(20, 380, 15):
+        draw.rectangle((20, y, 280, y + 8), fill=(0, 0, 0))
+    assert is_blank_page(img) is False
+
+
+def test_tol_파라미터로_민감도_조정_가능():
+    # 채널 표준편차가 tol보다 작으면 blank, tol을 낮추면 같은 이미지가 not blank
+    rng = np.random.default_rng(1)
+    arr = np.full((200, 200, 3), 200, dtype=np.int16)
+    noise = rng.integers(-6, 7, size=arr.shape)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+    img = Image.fromarray(arr, mode="RGB")
+    assert is_blank_page(img, tol=8) is True
+    assert is_blank_page(img, tol=0) is False

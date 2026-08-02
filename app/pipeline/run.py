@@ -15,7 +15,7 @@ from PIL import Image
 
 from app.config import settings
 from app.pipeline.epub_build import build_epub
-from app.pipeline.imgproc import trim_uniform_margins
+from app.pipeline.imgproc import is_blank_page, trim_uniform_margins
 from app.pipeline.layout import PageLayout
 from app.pipeline.ocr_api import MistralOcrClient, OcrApiError
 from app.pipeline.ocr_layout import build_layouts_from_ocr
@@ -216,6 +216,12 @@ def _fill_missing_pages(page_layouts, render_result, figures_dir):
 
     API가 일부 페이지를 못 읽어도 책 내용이 조용히 유실되면 안 된다 —
     V1과 동일하게 페이지 이미지라도 보존한다.
+
+    단, 챕터 구분용 백지(단색) 페이지는 예외다 — OCR 블록 0개로 오는 흔한
+    경우인데, 그 페이지 이미지를 그대로 임베드하면 무의미한 빈 이미지가
+    남는다. is_blank_page로 거의 단색인지 확인해서 단색이면 그 페이지는
+    (빈 PageLayout도 만들지 않고) 결과에서 통째로 제외한다. 그림 한 장만
+    있는 페이지(사진 전면 페이지)는 단색이 아니므로 영향받지 않는다.
     """
     from app.pipeline.text_extract import embed_page_as_figure
 
@@ -226,6 +232,11 @@ def _fill_missing_pages(page_layouts, render_result, figures_dir):
         if layout is not None and layout.blocks:
             filled.append(layout)
             continue
+
+        if _is_blank_page_image(render_result, i):
+            logger.info("페이지 %d: 단색 백지 페이지 — 임베드 제외", i + 1)
+            continue
+
         block = embed_page_as_figure(render_result, i, figures_dir)
         if block is not None:
             logger.warning("페이지 %d: OCR 결과 없음 — 페이지 이미지로 대체", i + 1)
@@ -233,3 +244,22 @@ def _fill_missing_pages(page_layouts, render_result, figures_dir):
         elif layout is not None:
             filled.append(layout)  # PNG도 없으면 빈 레이아웃이라도 유지
     return filled
+
+
+def _is_blank_page_image(render_result, page_num: int) -> bool:
+    """render_result.page_images[page_num]가 거의 단색 페이지인지 확인한다.
+
+    페이지 PNG가 없거나 열 수 없으면 False (판정 불가 -> 기존 동작대로
+    임베드 시도하게 둔다).
+    """
+    page_images = getattr(render_result, "page_images", []) or []
+    if page_num >= len(page_images):
+        return False
+    src_path = page_images[page_num]
+    if src_path is None or not Path(src_path).exists():
+        return False
+    try:
+        with Image.open(src_path) as img:
+            return is_blank_page(img)
+    except Exception:
+        return False

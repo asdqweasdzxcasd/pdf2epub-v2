@@ -60,6 +60,48 @@ def test_build_layouts_블록_없는_페이지는_비어있다(tmp_path):
     assert layouts[0].blocks == []
 
 
+def test_heading_블록은_마크다운_접두사에서_레벨을_뽑고_텍스트에서_제거한다(tmp_path):
+    pages = [{
+        "index": 0, "dimensions": {}, "markdown": "",
+        "blocks": [{"type": "title", "top_left_x": 0.0, "top_left_y": 0.0,
+                    "bottom_right_x": 0.5, "bottom_right_y": 0.1,
+                    "content": "## 정적 자원과 브라우저 캐시"}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[], figures_dir=tmp_path)
+    blk = layouts[0].blocks[0]
+    assert blk.block_type is BlockType.HEADING
+    assert blk.level == 2
+    assert blk.text == "정적 자원과 브라우저 캐시"
+
+
+def test_heading_블록에_마크다운_접두사가_없으면_레벨0(tmp_path):
+    pages = [{
+        "index": 0, "dimensions": {}, "markdown": "",
+        "blocks": [{"type": "title", "top_left_x": 0.0, "top_left_y": 0.0,
+                    "bottom_right_x": 0.5, "bottom_right_y": 0.1,
+                    "content": "그냥 제목"}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[], figures_dir=tmp_path)
+    blk = layouts[0].blocks[0]
+    assert blk.level == 0
+    assert blk.text == "그냥 제목"
+
+
+def test_heading_아닌_블록은_레벨0_유지(tmp_path):
+    pages = [{
+        "index": 0, "dimensions": {}, "markdown": "",
+        "blocks": [{"type": "text", "top_left_x": 0.0, "top_left_y": 0.0,
+                    "bottom_right_x": 0.5, "bottom_right_y": 0.1,
+                    "content": "## 마크다운처럼 보이지만 본문"}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[], figures_dir=tmp_path)
+    blk = layouts[0].blocks[0]
+    assert blk.block_type is BlockType.PARAGRAPH
+    assert blk.level == 0
+    # paragraph는 헤딩 접두사를 벗기지 않는다 (to_xhtml이 나중에 그대로 이스케이프)
+    assert blk.text == "## 마크다운처럼 보이지만 본문"
+
+
 def _make_page_png(tmp_path, w=200, h=400, color=(255, 0, 0)):
     from PIL import Image
     p = tmp_path / "page_000.png"

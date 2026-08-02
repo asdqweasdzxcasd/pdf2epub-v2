@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from ebooklib import epub
 
+from app.pipeline.markdown_inline import to_xhtml
+
 logger = logging.getLogger(__name__)
 
 
@@ -274,7 +276,8 @@ def _build_chapter_html(
             if bt == "heading":
                 text = block.text.strip() if block.text else ""
                 if text:
-                    parts.append(f"<h1>{_escape_html(text)}</h1>")
+                    tag = _heading_tag(getattr(block, "level", 0))
+                    parts.append(f"<{tag}>{to_xhtml(text)}</{tag}>")
 
             elif bt == "paragraph":
                 text = block.text.strip() if block.text else ""
@@ -283,13 +286,13 @@ def _build_chapter_html(
                     for line in text.split("\n"):
                         line = line.strip()
                         if line:
-                            parts.append(f"<p>{_escape_html(line)}</p>")
+                            parts.append(f"<p>{to_xhtml(line)}</p>")
 
             elif bt == "list_item":
                 text = block.text.strip() if block.text else ""
                 if text:
                     parts.append(
-                        f'<p>{_escape_html("* " + text)}</p>'
+                        f"<p>* {to_xhtml(text)}</p>"
                     )
 
             elif bt == "figure" and block.image_path:
@@ -336,7 +339,7 @@ def _build_chapter_html(
                 text = block.text.strip() if block.text else ""
                 if text:
                     parts.append(
-                        f'<p class="caption">{_escape_html(text)}</p>'
+                        f'<p class="caption">{to_xhtml(text)}</p>'
                     )
 
             elif bt == "footnote":
@@ -344,7 +347,7 @@ def _build_chapter_html(
                 if text:
                     parts.append(
                         f'<div class="footnote">'
-                        f"<p>{_escape_html(text)}</p>"
+                        f"<p>{to_xhtml(text)}</p>"
                         f"</div>"
                     )
 
@@ -374,10 +377,25 @@ def _figure_html(image_path: str, caption_text: str = "") -> str:
     if caption_text:
         return (
             f'<figure class="figure">{img_tag}'
-            f"<figcaption>{_escape_html(caption_text)}</figcaption>"
+            f"<figcaption>{to_xhtml(caption_text)}</figcaption>"
             f"</figure>"
         )
     return f'<figure class="figure">{img_tag}</figure>'
+
+
+_HEADING_TAGS = ("h1", "h2", "h3")
+
+
+def _heading_tag(level: int) -> str:
+    """heading level(0~6)을 <h1>~<h3> 태그로 매핑한다.
+
+    level 0(레벨 정보 없음, V1 호환)과 level 1은 <h1>. level 2는 <h2>.
+    level 3 이상(소소제목)은 <h3>로 클램프한다.
+    """
+    if level <= 1:
+        return "h1"
+    idx = min(level - 1, len(_HEADING_TAGS) - 1)
+    return _HEADING_TAGS[idx]
 
 
 def markdown_table_to_html(md: str) -> str:
@@ -403,7 +421,7 @@ def markdown_table_to_html(md: str) -> str:
         if is_separator(row):
             continue
         tag = "td" if header_done else "th"
-        tds = "".join(f"<{tag}>{_escape_html(c)}</{tag}>" for c in cells(row))
+        tds = "".join(f"<{tag}>{to_xhtml(c)}</{tag}>" for c in cells(row))
         parts.append(f"<tr>{tds}</tr>")
         header_done = True
     parts.append("</table>")
