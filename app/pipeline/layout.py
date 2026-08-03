@@ -40,6 +40,7 @@ class Block:
     text: str = ""
     image_path: str | None = None  # figure/table/formula 블록의 크롭 이미지 파일명
     level: int = 0  # heading 레벨 (1~6). 0이면 레벨 정보 없음 (V1 호환 기본값)
+    bg: tuple[int, int, int] | None = None  # 페이지 이미지에서 추출한 배경색 (V1/기본값은 None)
 
 
 @dataclass

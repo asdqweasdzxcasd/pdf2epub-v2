@@ -15,7 +15,7 @@ from PIL import Image
 
 from app.config import settings
 from app.pipeline.epub_build import build_epub
-from app.pipeline.imgproc import is_blank_page, trim_uniform_margins
+from app.pipeline.imgproc import ink_coverage, is_blank_page, trim_uniform_margins
 from app.pipeline.layout import PageLayout
 from app.pipeline.ocr_api import MistralOcrClient, OcrApiError
 from app.pipeline.ocr_layout import build_layouts_from_ocr
@@ -102,6 +102,10 @@ def run_pipeline(
             figures_dir=figures_dir,
             progress=progress,
         )
+        # 표지 판정은 refine보다 먼저 — 페이지 0이 표지 이미지로 통째 대체되면
+        # 그 안에 있던 CAPTION 등 refine 대상 블록도 함께 사라지는 게 맞다
+        # (원본 render 페이지 이미지 기준으로 판정 — 트림 여부와 무관).
+        page_layouts = _replace_cover_page(page_layouts, render_result, figures_dir)
         # refine은 _fill_missing_pages 전에 실행 — fallback은 CAPTION이
         # 없어 refine 대상이 아님 (순서 바꾸면 좌표계 가정이 깨짐)
         if refine:
@@ -244,6 +248,61 @@ def _fill_missing_pages(page_layouts, render_result, figures_dir):
         elif layout is not None:
             filled.append(layout)  # PNG도 없으면 빈 레이아웃이라도 유지
     return filled
+
+
+_COVER_INK_THRESHOLD = 0.5  # 이 이상 비백색이면 "디자인된 표지"로 판정
+
+
+def _replace_cover_page(page_layouts, render_result, figures_dir):
+    """첫 페이지(index 0)가 디자인된 표지로 판정되면 그 페이지의 텍스트
+    블록들을 페이지 이미지 전체를 담은 FIGURE 블록 하나로 대체한다.
+
+    판정: 페이지 0 이미지의 ink_coverage(비백색 비율)가 0.5 이상이면 표지.
+    단, is_blank_page(단색 페이지)이면 챕터 구분용 백지 등을 표지로 오인하지
+    않도록 판정에서 제외한다.
+
+    표지가 아니거나 페이지 0 이미지를 확인/임베드할 수 없으면 원래
+    page_layouts를 그대로 반환한다(한 페이지 판정 실패가 변환 전체를
+    죽이면 안 됨).
+    """
+    page_images = getattr(render_result, "page_images", []) or []
+    if not page_images:
+        return page_layouts
+    src = page_images[0]
+    if src is None or not Path(src).exists():
+        return page_layouts
+
+    try:
+        with Image.open(src) as img:
+            if is_blank_page(img):
+                return page_layouts
+            coverage = ink_coverage(img)
+    except Exception:
+        return page_layouts
+
+    if coverage < _COVER_INK_THRESHOLD:
+        return page_layouts
+
+    # 지연 import — text_extract가 run 모듈을 다시 참조하지 않아 순환 의존은
+    # 없지만, 이 표지 경로에서만 필요한 헬퍼라 다른 모듈들과 같은 관례를 따른다.
+    from app.pipeline.text_extract import embed_page_as_figure
+
+    cover_block = embed_page_as_figure(render_result, 0, figures_dir)
+    if cover_block is None:
+        return page_layouts
+
+    replaced: list[PageLayout] = []
+    found = False
+    for layout in page_layouts:
+        if layout.page_num == 0:
+            replaced.append(PageLayout(page_num=0, blocks=[cover_block]))
+            found = True
+        else:
+            replaced.append(layout)
+    if not found:
+        replaced.append(PageLayout(page_num=0, blocks=[cover_block]))
+        replaced.sort(key=lambda pl: pl.page_num)
+    return replaced
 
 
 def _is_blank_page_image(render_result, page_num: int) -> bool:

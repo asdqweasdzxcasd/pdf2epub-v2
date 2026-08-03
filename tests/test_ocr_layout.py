@@ -102,6 +102,75 @@ def test_heading_아닌_블록은_레벨0_유지(tmp_path):
     assert blk.text == "## 마크다운처럼 보이지만 본문"
 
 
+# --- Block.bg 추출 ---
+
+
+def _make_bg_page_png(tmp_path, w=300, h=200, pastel=(244, 248, 239)):
+    from PIL import Image, ImageDraw
+    p = tmp_path / "page_000.png"
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((20, 20, 280, 80), fill=pastel)  # 제목 영역 배경
+    draw.rectangle((40, 40, 200, 55), fill=(0, 0, 0))  # 검은 글자 stub
+    img.save(p)
+    return p
+
+
+def test_텍스트_블록에_배경색이_채워진다(tmp_path):
+    pastel = (244, 248, 239)
+    page_png = _make_bg_page_png(tmp_path, pastel=pastel)
+    pages = [{
+        "index": 0, "dimensions": {"width": 300, "height": 200}, "markdown": "",
+        "blocks": [{"type": "title", "top_left_x": 20, "top_left_y": 20,
+                    "bottom_right_x": 280, "bottom_right_y": 80,
+                    "content": "제목"}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[page_png], figures_dir=tmp_path / "f")
+    blk = layouts[0].blocks[0]
+    assert blk.bg == pastel
+
+
+def test_페이지_이미지_없으면_배경색은_None(tmp_path):
+    pages = [{
+        "index": 0, "dimensions": {}, "markdown": "",
+        "blocks": [{"type": "text", "top_left_x": 0.0, "top_left_y": 0.0,
+                    "bottom_right_x": 0.5, "bottom_right_y": 0.3,
+                    "content": "본문"}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[], figures_dir=tmp_path / "f")
+    assert layouts[0].blocks[0].bg is None
+
+
+def test_흰_배경_블록은_bg_None(tmp_path):
+    from PIL import Image, ImageDraw
+    p = tmp_path / "page_000.png"
+    img = Image.new("RGB", (300, 200), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((40, 40, 200, 55), fill=(0, 0, 0))
+    img.save(p)
+    pages = [{
+        "index": 0, "dimensions": {"width": 300, "height": 200}, "markdown": "",
+        "blocks": [{"type": "text", "top_left_x": 20, "top_left_y": 20,
+                    "bottom_right_x": 280, "bottom_right_y": 80,
+                    "content": "본문"}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[p], figures_dir=tmp_path / "f")
+    assert layouts[0].blocks[0].bg is None
+
+
+def test_크롭_대상_블록은_bg를_추출하지_않는다(tmp_path):
+    """figure/formula는 이미지로 크롭될 뿐 bg 추출 대상이 아니다(spec: 텍스트
+    계열 블록만 대상)."""
+    page_png = _make_page_png(tmp_path)
+    pages = [{
+        "index": 0, "dimensions": {}, "markdown": "",
+        "blocks": [{"type": "image", "top_left_x": 0.0, "top_left_y": 0.0,
+                    "bottom_right_x": 0.5, "bottom_right_y": 0.5, "content": ""}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[page_png], figures_dir=tmp_path / "f")
+    blk = layouts[0].blocks[0]
+    assert blk.bg is None
+
+
 def _make_page_png(tmp_path, w=200, h=400, color=(255, 0, 0)):
     from PIL import Image
     p = tmp_path / "page_000.png"

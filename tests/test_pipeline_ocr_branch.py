@@ -315,6 +315,123 @@ def test_일부만_단색인_경우_단색_페이지만_제외된다(tmp_path):
     assert [layout.page_num for layout in result] == [1]
 
 
+def _make_cover_pdf(tmp_path, name="cover.pdf") -> Path:
+    """비백색 비율이 높은(표지처럼 디자인된) 1페이지 PDF.
+
+    두 가지 대비되는 색 블록으로 페이지 대부분을 채운다 -- 단색 한 가지로만
+    채우면 is_blank_page(표준편차 낮음)에 걸려 '단색 백지'로 오인되므로,
+    대비되는 두 색을 써서 표준편차를 확보한다.
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=200, height=300)
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(0, 0, 200, 150))
+    shape.finish(fill=(0.1, 0.2, 0.5))
+    shape.commit()
+    shape2 = page.new_shape()
+    shape2.draw_rect(fitz.Rect(0, 150, 200, 300))
+    shape2.finish(fill=(0.85, 0.75, 0.1))
+    shape2.commit()
+    p = tmp_path / name
+    doc.save(p)
+    return p
+
+
+def _make_sparse_image_pdf(tmp_path, name="sparse.pdf") -> Path:
+    """텍스트는 없지만(ocr_needed=True 유도) 비백색 비율이 낮은 1페이지 PDF
+    -- 일반 본문 첫 페이지(표지 아님)를 흉내낸다."""
+    doc = fitz.open()
+    page = doc.new_page(width=200, height=300)
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(20, 20, 60, 50))
+    shape.finish(fill=(0.3, 0.3, 0.3))
+    shape.commit()
+    p = tmp_path / name
+    doc.save(p)
+    return p
+
+
+def test_디자인된_표지는_이미지_블록_하나로_대체되고_커버_메타데이터가_등록된다(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    pdf = _make_cover_pdf(tmp_path)
+    out = tmp_path / "out.epub"
+    with patch("app.pipeline.run.MistralOcrClient") as MockClient:
+        MockClient.return_value.process_pdf.return_value = _fake_pages(1)
+        result = run_pipeline(
+            pdf, out, tmp_path / "t", "cpu", "테스트", _NullProgress(),
+            ocr_mode="api",
+        )
+    assert result.page_count == 1
+
+    import zipfile
+    zf = zipfile.ZipFile(out)
+    names = zf.namelist()
+
+    xhtml_name = next(n for n in names if n.endswith(".xhtml") and "chapter" in n)
+    chapter_html = zf.read(xhtml_name).decode("utf-8")
+    # OCR이 준 텍스트("본문 0") 대신 페이지 이미지 하나로 대체돼야 한다
+    assert "본문 0" not in chapter_html
+    assert "<img" in chapter_html
+
+    opf_name = next(n for n in names if n.endswith(".opf"))
+    opf = zf.read(opf_name).decode("utf-8")
+    assert 'name="cover"' in opf
+
+
+def test_일반_텍스트_첫페이지는_표지로_오인되지_않는다(tmp_path, monkeypatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    pdf = _make_sparse_image_pdf(tmp_path)
+    out = tmp_path / "out.epub"
+    with patch("app.pipeline.run.MistralOcrClient") as MockClient:
+        MockClient.return_value.process_pdf.return_value = _fake_pages(1)
+        run_pipeline(
+            pdf, out, tmp_path / "t", "cpu", "테스트", _NullProgress(),
+            ocr_mode="api",
+        )
+
+    import zipfile
+    zf = zipfile.ZipFile(out)
+    names = zf.namelist()
+    xhtml_name = next(n for n in names if n.endswith(".xhtml") and "chapter" in n)
+    chapter_html = zf.read(xhtml_name).decode("utf-8")
+    # 표지로 오인되지 않았으므로 기존대로 OCR 텍스트가 그대로 남아있어야 한다
+    assert "본문 0" in chapter_html
+
+    opf_name = next(n for n in names if n.endswith(".opf"))
+    opf = zf.read(opf_name).decode("utf-8")
+    assert 'name="cover"' not in opf
+
+
+def test_단색_표지_페이지는_표지로_오인되지_않는다(tmp_path, monkeypatch):
+    """is_blank_page(단색)인 첫 페이지는 ink_coverage가 높아도 표지로
+    오인해선 안 된다(챕터 구분용 단색 페이지 등)."""
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    doc = fitz.open()
+    page = doc.new_page(width=200, height=300)
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(0, 0, 200, 300))
+    shape.finish(fill=(0.2, 0.2, 0.2))
+    shape.commit()
+    pdf = tmp_path / "blank_dark.pdf"
+    doc.save(pdf)
+
+    out = tmp_path / "out.epub"
+    with patch("app.pipeline.run.MistralOcrClient") as MockClient:
+        MockClient.return_value.process_pdf.return_value = _fake_pages(1)
+        run_pipeline(
+            pdf, out, tmp_path / "t", "cpu", "테스트", _NullProgress(),
+            ocr_mode="api",
+        )
+
+    import zipfile
+    zf = zipfile.ZipFile(out)
+    opf_name = next(n for n in zf.namelist() if n.endswith(".opf"))
+    opf = zf.read(opf_name).decode("utf-8")
+    assert 'name="cover"' not in opf
+
+
 def test_refine_실패가_전체_변환을_죽이지_않는다(tmp_path, monkeypatch):
     """Finding 1: refine_small_text가 OcrApiError를 던져도 변환이 계속되고
     EPUB이 생성된다. 보정은 부가 기능이므로 실패해도 무시한다.

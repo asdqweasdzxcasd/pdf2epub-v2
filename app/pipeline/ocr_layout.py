@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.pipeline.imgproc import strip_chromatic_frame
+from app.pipeline.imgproc import sample_block_background, strip_chromatic_frame
 from app.pipeline.layout import Block, BlockType, PageLayout
 from app.pipeline.markdown_inline import parse_heading
 
@@ -34,6 +34,16 @@ _TYPE_MAP: dict[str, BlockType] = {
 
 # 페이지 PNG에서 크롭해 이미지로 임베드하는 타입 (Task 2에서 구현)
 _CROP_TYPES = frozenset({BlockType.FIGURE, BlockType.FORMULA})
+
+# 배경색(Block.bg)을 추출할 텍스트 계열 타입 -- 그림/표/수식은 대상이 아니다
+# (그 자체가 이미지로 크롭되므로 배경 개념이 없음).
+_BG_TYPES = frozenset({
+    BlockType.HEADING,
+    BlockType.PARAGRAPH,
+    BlockType.LIST_ITEM,
+    BlockType.CODE,
+    BlockType.CAPTION,
+})
 
 # bbox 바깥으로 확장할 여유(px) — Mistral bbox가 다이어그램 경계선보다
 # 타이트해 콘텐츠가 잘리는 문제 보정. 여분 배경은 strip_chromatic_frame이
@@ -85,41 +95,76 @@ def build_layouts_from_ocr(
     for page in pages:
         page_num = page.get("index", 0)
         blocks: list[Block] = []
-        for raw in page.get("blocks") or []:
-            btype = map_block_type(raw.get("type", ""))
-            if btype in _CROP_TYPES:
-                img_path = _crop_block(
-                    raw, page, page_num, len(blocks), page_images, figures_dir
-                )
-                if img_path is None:
+        page_img = _open_page_image(page_num, page_images)
+        try:
+            for raw in page.get("blocks") or []:
+                btype = map_block_type(raw.get("type", ""))
+                if btype in _CROP_TYPES:
+                    img_path = _crop_block(
+                        raw, page, page_num, len(blocks), page_images, figures_dir
+                    )
+                    if img_path is None:
+                        continue
+                    blocks.append(Block(
+                        block_type=btype,
+                        bbox=(0.0, 0.0, 0.0, 0.0),
+                        confidence=1.0,
+                        image_path=img_path,
+                    ))
                     continue
+                content = (raw.get("content") or "").strip()
+                if not content:
+                    continue
+                try:
+                    bbox = (
+                        float(raw["top_left_x"]), float(raw["top_left_y"]),
+                        float(raw["bottom_right_x"]), float(raw["bottom_right_y"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    bbox = (0.0, 0.0, 0.0, 0.0)
+                level = 0
+                if btype is BlockType.HEADING:
+                    level, content = parse_heading(content)
+                bg = None
+                if btype in _BG_TYPES and page_img is not None:
+                    bg = _sample_block_bg(raw, page, page_img)
                 blocks.append(Block(
-                    block_type=btype,
-                    bbox=(0.0, 0.0, 0.0, 0.0),
-                    confidence=1.0,
-                    image_path=img_path,
+                    block_type=btype, bbox=bbox, confidence=1.0, text=content,
+                    level=level, bg=bg,
                 ))
-                continue
-            content = (raw.get("content") or "").strip()
-            if not content:
-                continue
-            try:
-                bbox = (
-                    float(raw["top_left_x"]), float(raw["top_left_y"]),
-                    float(raw["bottom_right_x"]), float(raw["bottom_right_y"]),
-                )
-            except (KeyError, TypeError, ValueError):
-                bbox = (0.0, 0.0, 0.0, 0.0)
-            level = 0
-            if btype is BlockType.HEADING:
-                level, content = parse_heading(content)
-            blocks.append(Block(
-                block_type=btype, bbox=bbox, confidence=1.0, text=content,
-                level=level,
-            ))
+        finally:
+            if page_img is not None:
+                page_img.close()
         layouts.append(PageLayout(page_num=page_num, blocks=blocks))
 
     return layouts
+
+
+def _open_page_image(page_num: int, page_images: list[Path]) -> Image.Image | None:
+    """배경색 추출용 페이지 이미지를 연다. 없거나 못 열면 None(호출자는 bg를
+    포기하고 계속 진행 -- 한 페이지 실패가 변환 전체를 죽이면 안 됨)."""
+    if page_num >= len(page_images):
+        return None
+    src = page_images[page_num]
+    if src is None or not Path(src).exists():
+        return None
+    try:
+        return Image.open(src).convert("RGB")
+    except Exception:
+        return None
+
+
+def _sample_block_bg(raw: dict, page: dict, page_img: Image.Image) -> tuple[int, int, int] | None:
+    """raw 블록의 bbox를 페이지 이미지 픽셀 좌표로 변환해 배경색을 추출한다.
+
+    scale_bbox가 요구하는 좌표 키가 없거나 타입이 잘못됐으면 None(bbox 파싱과
+    동일한 관용 -- 이 블록의 배경 추출만 포기하고 텍스트는 그대로 유지).
+    """
+    try:
+        box = scale_bbox(raw, page_img.width, page_img.height, page.get("dimensions") or {})
+    except (KeyError, TypeError, ValueError):
+        return None
+    return sample_block_background(page_img, box)
 
 
 _EXTEND_CAP = 40  # 변당 콘텐츠 경계 확장 상한(px)

@@ -255,6 +255,32 @@ sub {
 }
 
 /* ============================================================
+   aside.tinted -- 페이지 이미지에서 추출한 배경색으로 원본 책의 강조 박스
+   (제목 박스, 표지 등)를 복원한다. 배경색은 인라인 style로 지정되므로
+   여기서는 안쪽 여백/모서리/위아래 간격만 담당한다.
+
+   다크 모드 주의: 배경색은 원본 지면에서 읽은 밝은 파스텔 색 그대로
+   인라인으로 박혀 있어, 리더가 화면 전체를 다크 테마로 뒤집어도 이
+   배경만은 뒤집히지 않고 원래 밝은 색으로 남는다. 그런데 리더가 본문
+   글자색은 테마에 맞춰 밝은 색으로 바꿔버리면 "밝은 배경 위에 밝은 글자"가
+   되어 안 보이게 된다. 이를 막기 위해 박스 안 글자색을 테마와 무관하게
+   항상 어둡게 고정한다 -- 리더가 색을 강제로 덮어써도 이 규칙이 우선하도록
+   구체적으로(자손 셀렉터 *) 지정한다.
+   ============================================================ */
+.tinted {
+  padding: 0.9em 1.1em;
+  margin: 1.2em 0;
+  border-radius: 0.4em;
+  page-break-inside: avoid;
+}
+.tinted, .tinted * {
+  color: #1a1a1a;
+}
+.tinted p {
+  text-indent: 0;
+}
+
+/* ============================================================
    다크 모드 보정 -- 옅은 검정 오버레이는 어두운 배경에서 거의 안 보이므로
    밝은 계열 오버레이로 뒤집는다. 글자색/배경 자체는 리더가 관리하므로
    여기서는 건드리지 않는다.
@@ -317,6 +343,8 @@ def build_epub(
     # has_toc: 진짜 목차가 있는지 (False면 단일 본문, ToC/nav에 항목 추가 안 함)
     has_toc = bool(toc_entries)
     chapters = _split_into_chapters(page_layouts, toc_entries, fallback_title=title)
+
+    _set_cover_if_present(book, chapters, figures_dir)
 
     # spine은 챕터들로만 시작. nav.xhtml은 spine 첫 항목으로 안 넣음 →
     # 리더의 ToC 메뉴로만 작동, 본문 첫 페이지는 chapter_000부터.
@@ -420,6 +448,34 @@ def _register_images(
     return image_items
 
 
+def _set_cover_if_present(
+    book: "epub.EpubBook",
+    chapters: list[tuple[str, list]],
+    figures_dir: Path,
+) -> None:
+    """첫 챕터의 첫 블록이 표지 이미지(FIGURE)면 EPUB 표지 메타데이터로도
+    등록한다 -- 리더가 서가/썸네일에서 표지를 인식하게 하기 위함.
+
+    본문에도 같은 이미지가 그대로 한 번 더 렌더되지만(image_items로 등록된
+    "images/<파일명>"), set_cover는 별도 uid/파일명("images/cover_<파일명>")
+    으로 새 항목을 추가하므로 zip 엔트리 충돌 없이 중복 등록된다.
+    """
+    if not chapters:
+        return
+    _, first_chapter_layouts = chapters[0]
+    if not first_chapter_layouts or not first_chapter_layouts[0].blocks:
+        return
+    first_block = first_chapter_layouts[0].blocks[0]
+    if _block_type_str(first_block) != "figure" or not first_block.image_path:
+        return
+
+    cover_path = figures_dir / first_block.image_path
+    if not cover_path.exists():
+        return
+
+    book.set_cover(f"images/cover_{first_block.image_path}", cover_path.read_bytes())
+
+
 def _split_into_chapters(
     page_layouts: list,
     toc_entries: list,
@@ -514,6 +570,12 @@ def _build_chapter_html(
     - table/formula → 이미지가 있으면 <img>, 없으면 alt 텍스트
     - footnote → <div class="footnote">
     - page_header, page_footer → EPUB에서 제외
+    - 배경색(Block.bg)이 있고 채널별 최대 차 8 이하로 비슷한, 같은 페이지
+      안에서 연속된 텍스트 계열 블록들은 <aside class="tinted"
+      style="background-color:#rrggbb"> 박스로 묶는다 (원본 책의 강조 박스
+      복원). 페이지의 텍스트 계열 블록 전부가 같은 색이면 그건 박스가 아니라
+      페이지 배경이므로 틴트를 적용하지 않는다. 페이지 경계를 넘어 묶지 않음.
+      자세한 규칙은 _compute_tint_runs 참고.
     """
     parts = [
         '<?xml version="1.0" encoding="utf-8"?>',
@@ -529,10 +591,109 @@ def _build_chapter_html(
     ]
 
     for layout in chapter_layouts:
-        blocks = layout.blocks
-        n = len(blocks)
-        i = 0
-        while i < n:
+        _render_page_with_tints(layout.blocks, parts)
+
+    parts.append("</body>")
+    parts.append("</html>")
+
+    return "\n".join(parts)
+
+
+_TINT_TOL = 8  # 채널별 최대 차 이 값 이하면 "비슷한 배경색"으로 묶는다
+_TINT_TYPES = frozenset({"heading", "paragraph", "list_item", "code", "caption"})
+
+
+def _bg_close(a: tuple[int, int, int], b: tuple[int, int, int], tol: int = _TINT_TOL) -> bool:
+    """두 배경색의 채널별 차가 모두 tol 이하인지."""
+    return all(abs(a[k] - b[k]) <= tol for k in range(3))
+
+
+def _compute_tint_runs(
+    blocks: list,
+) -> list[tuple[int, int, tuple[int, int, int]]]:
+    """한 페이지의 블록 리스트에서 배경 틴트 박스로 묶을 (시작, 끝(배타),
+    색) 구간들을 계산한다.
+
+    가드: 텍스트 계열 블록(_TINT_TYPES) 전부가 같은 비-None 배경색이면 그건
+    강조 박스가 아니라 페이지 배경이므로 빈 리스트를 반환한다(틴트 미적용).
+
+    그 외에는 bg가 None이 아니고 서로 비슷한(≤_TINT_TOL) 색이 연속되는
+    구간마다 하나의 런(run)을 만든다(단일 블록도 런이 될 수 있다 -- 예:
+    제목 하나만 박스 처리된 경우).
+    """
+    text_blocks = [b for b in blocks if _block_type_str(b) in _TINT_TYPES]
+    if text_blocks and all(
+        b.bg is not None and _bg_close(b.bg, text_blocks[0].bg) for b in text_blocks
+    ):
+        return []  # 페이지 전체 배경 -- 박스 아님
+
+    runs: list[tuple[int, int, tuple[int, int, int]]] = []
+    n = len(blocks)
+    i = 0
+    while i < n:
+        bg = getattr(blocks[i], "bg", None)
+        if bg is None:
+            i += 1
+            continue
+        j = i + 1
+        while j < n:
+            nbg = getattr(blocks[j], "bg", None)
+            if nbg is None or not _bg_close(nbg, bg):
+                break
+            j += 1
+        runs.append((i, j, bg))
+        i = j
+    return runs
+
+
+def _render_page_with_tints(blocks: list, parts: list) -> None:
+    """페이지 블록들을 렌더링하되, _compute_tint_runs가 찾은 구간은
+    <aside class="tinted"> 박스로 감싼다.
+
+    bg가 설정된 블록이 없으면(V1 등 기존 호출부) runs가 비어 있어 페이지
+    전체를 한 번에 _render_page_blocks로 넘긴다 -- 기존 동작과 동일.
+    """
+    runs = _compute_tint_runs(blocks)
+    if not runs:
+        _render_page_blocks(blocks, parts)
+        return
+
+    n = len(blocks)
+    i = 0
+    run_idx = 0
+    while i < n:
+        if run_idx < len(runs) and runs[run_idx][0] == i:
+            start, end, color = runs[run_idx]
+            run_idx += 1
+            seg_start = len(parts)
+            _render_page_blocks(blocks[start:end], parts)
+            if len(parts) > seg_start:
+                hex_color = "#%02x%02x%02x" % color
+                wrapped = parts[seg_start:]
+                del parts[seg_start:]
+                parts.append(
+                    f'<aside class="tinted" style="background-color:{hex_color}">'
+                )
+                parts.extend(wrapped)
+                parts.append("</aside>")
+            i = end
+        else:
+            next_boundary = runs[run_idx][0] if run_idx < len(runs) else n
+            _render_page_blocks(blocks[i:next_boundary], parts)
+            i = next_boundary
+
+
+def _render_page_blocks(blocks: list, parts: list) -> None:
+    """블록 리스트(페이지 전체 또는 틴트 박스로 묶일 부분범위) 하나를
+    XHTML로 렌더링해 parts에 append한다.
+
+    blocks가 페이지의 부분 슬라이스일 때는 슬라이스 경계 밖을 넘겨보는
+    룩어헤드(예: figure+caption 병합, 연속 list_item 묶기)가 슬라이스 길이
+    n으로 자연히 막힌다 -- 틴트 박스 경계를 넘는 병합을 방지한다.
+    """
+    n = len(blocks)
+    i = 0
+    while i < n:
             block = blocks[i]
             bt = _block_type_str(block)
 
@@ -660,11 +821,6 @@ def _build_chapter_html(
             # page_header, page_footer는 EPUB에서 제외 (무시)
 
             i += 1
-
-    parts.append("</body>")
-    parts.append("</html>")
-
-    return "\n".join(parts)
 
 
 def _block_type_str(block) -> str:

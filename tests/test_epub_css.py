@@ -67,6 +67,17 @@ def test_제목_계층_h1_h2_h3가_구분된다():
     assert "page-break-after: avoid" in css
 
 
+def test_tinted_스타일이_있고_글자색이_어둡게_고정된다():
+    """.tinted는 인라인 배경색(파스텔)이 다크 테마에서도 안 뒤집히므로,
+    글자색을 어둡게 고정해 어떤 테마에서도 읽히게 해야 한다."""
+    css = _css_text()
+    assert ".tinted" in css
+    assert "page-break-inside: avoid" in css
+    match = re.search(r"\.tinted,\s*\.tinted \*\s*\{([^}]*)\}", css)
+    assert match is not None, ".tinted 글자색 고정 규칙을 찾지 못함"
+    assert "color: #1a1a1a" in match.group(1)
+
+
 def test_figure와_table은_페이지_분리를_피한다():
     css = _css_text()
     figure_match = re.search(r"figure\.figure\s*\{([^}]*)\}", css)

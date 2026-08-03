@@ -57,6 +57,81 @@ def is_blank_page(img: Image.Image, tol: int = _DEFAULT_BLANK_TOL) -> bool:
     return std < tol
 
 
+def ink_coverage(img: Image.Image, threshold: int = 235) -> float:
+    """페이지 전체에서 비백색 픽셀이 차지하는 비율을 반환한다.
+
+    표지 판정에 쓰인다 — 디자인된 표지는 배경 이미지/컬러 블록으로 페이지
+    대부분을 채우는 반면, 본문 페이지는 흰 여백이 대부분이라 비백색 비율이
+    낮다(실측: 표지 0.947, 본문 0.016~0.138).
+
+    픽셀의 min(R,G,B)가 threshold 미만이면 "잉크(비백색)"로 센다 — 순백
+    (255,255,255)뿐 아니라 옅은 회색/컬러 배경도 threshold 이하면 여백으로
+    보지 않는다.
+
+    Args:
+        img: 판정할 페이지 이미지 (모드 무관 — RGB로 변환해 스캔)
+        threshold: 비백색으로 볼 min(R,G,B) 상한
+
+    Returns:
+        비백색 픽셀 비율 (0~1)
+    """
+    rgb = _scan_rgb(img)
+    non_white = rgb.min(axis=2) < threshold
+    return float(non_white.mean())
+
+
+_BG_BRIGHT_MIN = 180  # "밝은 픽셀"로 볼 min(R,G,B) 하한
+_BG_BRIGHT_OCCUPANCY = 0.3  # 밝은 픽셀이 이 비율 미만이면 배경 추출 포기(그림/표 등)
+_BG_WHITE_MIN = 244  # 중앙값 min이 이 값 초과면 흰색으로 보고 None
+_BG_DARK_MAX = 180  # 중앙값 min이 이 값 미만이면 너무 어두운 것으로 보고 None
+
+
+def sample_block_background(
+    img: Image.Image, box: tuple[float, float, float, float]
+) -> tuple[int, int, int] | None:
+    """블록 bbox 영역의 배경색을 페이지 이미지에서 추출한다.
+
+    bbox 영역 픽셀 중 min(R,G,B) > 180인 "밝은 픽셀"(글자/그림 등 어두운
+    전경을 제외한 배경 후보)들의 채널별 중앙값을 배경색으로 삼는다. 밝은
+    픽셀이 영역의 30% 미만이면 배경을 추출할 수 없는 것으로 보고 None을
+    반환한다(사진/그림 영역 등 오탐 방지).
+
+    흰 배경(중앙값 min > 244)은 강조색이 아니므로 None. 너무 어두운
+    결과(중앙값 min < 180)도 사진 위 텍스트 등의 오탐일 수 있어 None으로
+    처리한다.
+
+    Args:
+        img: 페이지 이미지 (모드 무관 — RGB로 변환해 스캔)
+        box: 블록 bbox, 픽셀 좌표 (x0, y0, x1, y1). x1/y1은 crop 관례상
+            배타적 상한으로 취급한다.
+
+    Returns:
+        배경색 (R, G, B) 또는 None
+    """
+    w, h = img.size
+    x0, y0, x1, y1 = (int(v) for v in box)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    region = np.asarray(img.convert("RGB").crop((x0, y0, x1, y1)), dtype=np.int16)
+    pixels = region.reshape(-1, 3)
+
+    bright_mask = pixels.min(axis=1) > _BG_BRIGHT_MIN
+    bright = pixels[bright_mask]
+    if bright.shape[0] < _BG_BRIGHT_OCCUPANCY * pixels.shape[0]:
+        return None
+
+    median = np.median(bright, axis=0)
+    if median.min() > _BG_WHITE_MIN:
+        return None
+    if median.min() < _BG_DARK_MAX:
+        return None
+
+    return tuple(int(round(v)) for v in median)
+
+
 def _uniform_bbox(
     rgb: np.ndarray, tol: int, occupancy: float
 ) -> tuple[int, int, int, int] | None:

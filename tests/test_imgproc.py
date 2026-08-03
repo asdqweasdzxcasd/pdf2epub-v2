@@ -2,7 +2,13 @@
 import numpy as np
 from PIL import Image, ImageDraw
 
-from app.pipeline.imgproc import is_blank_page, strip_chromatic_frame, trim_uniform_margins
+from app.pipeline.imgproc import (
+    ink_coverage,
+    is_blank_page,
+    sample_block_background,
+    strip_chromatic_frame,
+    trim_uniform_margins,
+)
 
 
 def _make_margin_image(bg=(255, 255, 255), fg=(0, 0, 0), size=200, box=(50, 50, 149, 149)):
@@ -413,3 +419,55 @@ def test_tol_파라미터로_민감도_조정_가능():
     img = Image.fromarray(arr, mode="RGB")
     assert is_blank_page(img, tol=8) is True
     assert is_blank_page(img, tol=0) is False
+
+
+# --- ink_coverage ---
+
+
+def test_흰_페이지의_ink_coverage는_0에_가깝다():
+    img = Image.new("RGB", (100, 100), (255, 255, 255))
+    assert ink_coverage(img) < 0.01
+
+
+def test_전면_색_페이지의_ink_coverage는_1에_가깝다():
+    img = Image.new("RGB", (100, 100), (30, 30, 30))
+    assert ink_coverage(img) > 0.99
+
+
+def test_ink_coverage_threshold_조정():
+    # 절반은 흰색, 절반은 threshold(235) 아래 회색 -> 커버리지 ~0.5
+    img = Image.new("RGB", (100, 100), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((0, 0, 99, 49), fill=(200, 200, 200))
+    cov = ink_coverage(img, threshold=235)
+    assert 0.45 < cov < 0.55
+
+
+# --- sample_block_background ---
+
+
+def test_파스텔_배경_위_검은_글자는_그_파스텔색을_반환한다():
+    pastel = (244, 248, 239)
+    img = Image.new("RGB", (100, 60), pastel)
+    ImageDraw.Draw(img).rectangle((10, 10, 90, 20), fill=(0, 0, 0))
+    bg = sample_block_background(img, (0, 0, 100, 60))
+    assert bg == pastel
+
+
+def test_흰_배경은_None():
+    img = Image.new("RGB", (100, 60), (255, 255, 255))
+    bg = sample_block_background(img, (0, 0, 100, 60))
+    assert bg is None
+
+
+def test_어두운_사진_영역은_None():
+    img = Image.new("RGB", (100, 60), (40, 40, 40))
+    bg = sample_block_background(img, (0, 0, 100, 60))
+    assert bg is None
+
+
+def test_밝은_픽셀_비율이_30퍼센트_미만이면_None():
+    # 어두운 배경 위에 작은 밝은 글자만 있는 영역(그림 오탐 방지)
+    img = Image.new("RGB", (100, 60), (40, 40, 40))
+    ImageDraw.Draw(img).rectangle((10, 10, 20, 20), fill=(250, 250, 250))
+    bg = sample_block_background(img, (0, 0, 100, 60))
+    assert bg is None
