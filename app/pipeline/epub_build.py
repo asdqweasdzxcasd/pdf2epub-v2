@@ -1,5 +1,6 @@
 """ebooklib 기반 EPUB3 조립"""
 
+import colorsys
 import logging
 import re
 from pathlib import Path
@@ -31,8 +32,12 @@ _CODE_FENCE_LINE_RE = re.compile(r"^```\S*$")
 # EPUB 기본 스타일시트.
 #
 # 설계 원칙 (모두 지킬 것):
-# - body에 font-family를 지정하지 않는다 -- 리더에서 사용자가 고른 폰트/크기를
-#   덮어쓰지 않기 위함. 모노스페이스가 필요한 pre/code에만 지정한다.
+# - body의 font-family는 특정 폰트를 강제하지 않는다 -- 리더에서 사용자가
+#   고른 폰트/크기를 덮어쓰지 않기 위함. 단, generic 키워드인 "serif"는
+#   예외로 허용한다: 원본 책이 명조(바탕) 계열로 조판돼 있어 이를 복원하되,
+#   특정 폰트명을 못박지 않으므로 사용자가 리더에서 고른 serif 계열 폰트가
+#   그대로 쓰인다(강제 폰트 아님). 모노스페이스가 필요한 pre/code에는 별도
+#   지정한다.
 # - 길이 단위는 전부 em/rem/%만 쓴다 (px 금지) -- 사용자가 글자 크기를
 #   키워도 여백/테두리가 함께 커지도록.
 # - 배경/글자색은 하드코딩하지 않는다. currentColor + rgba 투명도 오버레이로
@@ -42,10 +47,13 @@ _CODE_FENCE_LINE_RE = re.compile(r"^```\S*$")
 #   방지), overflow-wrap: break-word(긴 URL 등 대비).
 DEFAULT_CSS = """\
 /* ============================================================
-   전역 -- 본문 폰트는 리더 기본값을 그대로 쓴다 (font-family 지정 없음)
+   전역 -- 본문 폰트는 generic serif만 지정한다 (특정 폰트 강제 아님).
+   원본 지면과 대조한 결과 이 책은 명조(바탕) 계열로 조판돼 있어 이를
+   근사하되, 리더에서 사용자가 고른 serif 폰트가 그대로 적용되게 한다.
    ============================================================ */
 body {
-  line-height: 1.75;
+  font-family: serif;
+  line-height: 1.8;
   margin: 1em;
   word-break: keep-all;
   overflow-wrap: break-word;
@@ -85,7 +93,7 @@ h3 {
    ============================================================ */
 p {
   text-indent: 0;
-  margin: 0 0 0.7em;
+  margin: 0 0 1.0em;
   text-align: justify;
 }
 
@@ -269,7 +277,7 @@ sub {
   padding: 0.4em 0.9em;
   margin: 1.4em 0 0.9em;
   border-radius: 0.2em;
-  border-left: 0.35em solid currentColor;
+  border-left: 0.5em solid currentColor;
   page-break-inside: avoid;
 }
 
@@ -655,6 +663,43 @@ def _compute_tint_runs(
     return runs
 
 
+_ACCENT_SAT_MIN = 0.45  # 강조 막대의 최소 채도 (파스텔 배경도 이 아래로 안 내려감)
+_ACCENT_SAT_MULT = 3  # 원본 채도를 이만큼 끌어올린다
+_ACCENT_LIGHT_MULT = 0.62  # 원본 밝기를 이만큼 낮춘다
+_ACCENT_LIGHT_MAX = 0.55  # 강조 막대 밝기 상한
+
+
+def _accent_color(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """틴트 박스 배경색에서 왼쪽 강조 막대 색을 만든다.
+
+    각 채널에 같은 배율(예: 0.55)을 곱해 어둡게 하는 방식은 흰색에 가까운
+    파스텔 배경(채도가 이미 낮음)에서는 채도가 그대로 낮게 유지돼 회색
+    (#8b8283 등)이 되어버린다 -- 원본 책은 같은 색 계열의 선명한 막대를
+    쓰므로 이 방식은 원본과 다르다.
+
+    RGB -> HLS로 변환해 색상(hue)은 그대로 두고, 채도(saturation)는 크게
+    끌어올리고(원본의 _ACCENT_SAT_MULT배, 최소 _ACCENT_SAT_MIN) 밝기
+    (lightness)는 낮춰(원본의 _ACCENT_LIGHT_MULT배, 최대 _ACCENT_LIGHT_MAX)
+    다시 RGB로 되돌린다.
+
+    무채색(회색) 입력은 채도를 억지로 끌어올리면 안 되므로(존재하지 않는
+    색상이 생김) 원본 채도 0을 그대로 유지하고 밝기만 낮춘다.
+    """
+    r, g, b = (c / 255 for c in rgb)
+    h, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
+
+    new_lightness = min(lightness * _ACCENT_LIGHT_MULT, _ACCENT_LIGHT_MAX)
+    if saturation <= 0:
+        new_saturation = 0.0
+    else:
+        new_saturation = min(max(saturation * _ACCENT_SAT_MULT, _ACCENT_SAT_MIN), 1.0)
+
+    nr, ng, nb = colorsys.hls_to_rgb(h, new_lightness, new_saturation)
+    return tuple(
+        min(255, max(0, round(c * 255))) for c in (nr, ng, nb)
+    )
+
+
 def _render_page_with_tints(blocks: list, parts: list) -> None:
     """페이지 블록들을 렌더링하되, _compute_tint_runs가 찾은 구간은
     <aside class="tinted"> 박스로 감싼다.
@@ -678,9 +723,12 @@ def _render_page_with_tints(blocks: list, parts: list) -> None:
             _render_page_blocks(blocks[start:end], parts)
             if len(parts) > seg_start:
                 hex_color = "#%02x%02x%02x" % color
-                # 원본 책은 강조 밴드 왼쪽에 같은 계열의 진한 막대를 둔다.
-                # 배경색을 어둡게 눌러(0.55) 그 막대 색을 만든다.
-                accent = "#%02x%02x%02x" % tuple(int(c * 0.55) for c in color)
+                # 원본 책은 강조 밴드 왼쪽에 같은 계열의 선명한 막대를 둔다.
+                # 배경색과 채널별로 같은 비율로 어둡게 하면(예: *0.55) 파스텔
+                # 배경(채도가 이미 낮음)에서는 채도가 그대로 낮아 회색이 되어
+                # 버리므로, HLS 공간에서 채도를 끌어올리고 밝기를 낮춘다
+                # (_accent_color 참고).
+                accent = "#%02x%02x%02x" % _accent_color(color)
                 wrapped = parts[seg_start:]
                 del parts[seg_start:]
                 parts.append(

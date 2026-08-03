@@ -137,6 +137,28 @@ def _extract_from_headings(page_layouts: list) -> list[TocEntry]:
     return _extract_fallback_headings(page_layouts)
 
 
+def find_first_chapter_divider_page(page_layouts: list) -> int | None:
+    """문서에서 채택된 첫 "N장" 챕터 구분 페이지의 page_num을 반환한다.
+
+    _extract_chapter_dividers를 재사용한다 -- 한 페이지에 장 구분 heading이
+    2개 이상 몰린 목차 페이지는 거기서 이미 제외되므로 여기서도 자동으로
+    제외된다. 문서에 장 구분 heading이 아예 없거나, 있었지만 전부 목차
+    페이지로 걸러져 채택된 항목이 없으면 None을 반환한다 -- 호출부가 이
+    경우 앞부분 디자인 페이지 이미지화 처리를 건너뛰도록 하기 위함
+    (다른 책 형식을 오탐으로 건드리지 않기 위한 보호 장치).
+
+    Args:
+        page_layouts: PageLayout 리스트
+
+    Returns:
+        채택된 장 구분 항목 중 가장 작은 page_num, 또는 None
+    """
+    _, entries = _extract_chapter_dividers(page_layouts)
+    if not entries:
+        return None
+    return min(entry.page_num for entry in entries)
+
+
 def _extract_chapter_dividers(page_layouts: list) -> tuple[bool, list[TocEntry]]:
     """"N장" 단독 heading을 챕터 경계로 삼아 목차를 만든다.
 

@@ -7,7 +7,12 @@ import fitz
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from app.pipeline.run import _fill_missing_pages, run_pipeline
+from app.pipeline.layout import Block, BlockType, PageLayout
+from app.pipeline.run import (
+    _fill_missing_pages,
+    _replace_front_matter_design_pages,
+    run_pipeline,
+)
 
 
 class _NullProgress:
@@ -458,3 +463,116 @@ def test_refine_실패가_전체_변환을_죽이지_않는다(tmp_path, monkeyp
 
     assert out.exists(), "refine 실패해도 EPUB이 생성되어야 한다"
     assert result.page_count == 1
+
+
+# --- _replace_front_matter_design_pages ---
+
+
+def _heading_block(text, level=1):
+    return Block(block_type=BlockType.HEADING, bbox=(0, 0, 0, 0),
+                 confidence=1.0, text=text, level=level)
+
+
+def _para_block(text):
+    return Block(block_type=BlockType.PARAGRAPH, bbox=(0, 0, 0, 0),
+                 confidence=1.0, text=text)
+
+
+def _make_design_page_png(tmp_path, name="design.png", size=(200, 300)):
+    """컬러 챕터 밴드가 넓은 디자인 페이지 (차례류)를 흉내낸다."""
+    img = Image.new("RGB", size, (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((0, 0, size[0] - 1, 90), fill=(230, 90, 60))
+    p = tmp_path / name
+    img.save(p)
+    return p
+
+
+def _make_text_page_png(tmp_path, name="text.png", size=(200, 300)):
+    """유채색 비율이 낮은 본문 텍스트 페이지(머리말 등)를 흉내낸다."""
+    img = Image.new("RGB", size, (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    for y in range(20, 280, 15):
+        draw.rectangle((20, y, 180, y + 8), fill=(20, 20, 20))
+    p = tmp_path / name
+    img.save(p)
+    return p
+
+
+def test_장구분_앞_유채색_페이지는_FIGURE로_대체된다(tmp_path):
+    design_png = _make_design_page_png(tmp_path, "p0.png")
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=2, page_images=[design_png, None])
+
+    page_layouts = [
+        PageLayout(page_num=0, blocks=[_para_block("차례"), _para_block("1장 ...")]),
+        PageLayout(page_num=1, blocks=[_heading_block("1장"), _heading_block("시작")]),
+    ]
+
+    result = _replace_front_matter_design_pages(page_layouts, render_result, figures_dir)
+
+    page0 = next(pl for pl in result if pl.page_num == 0)
+    assert len(page0.blocks) == 1
+    assert page0.blocks[0].block_type == BlockType.FIGURE
+    assert page0.blocks[0].image_path
+    # 장 구분 페이지(1) 자체는 건드리지 않는다
+    page1 = next(pl for pl in result if pl.page_num == 1)
+    assert page1.blocks[0].block_type == BlockType.HEADING
+
+
+def test_유채색_낮은_앞페이지는_텍스트로_유지된다(tmp_path):
+    """머리말처럼 유채색 비율이 낮은 앞부분 페이지는 대체되면 안 된다."""
+    text_png = _make_text_page_png(tmp_path, "p0.png")
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=2, page_images=[text_png, None])
+
+    page_layouts = [
+        PageLayout(page_num=0, blocks=[_para_block("머리말 내용")]),
+        PageLayout(page_num=1, blocks=[_heading_block("1장"), _heading_block("시작")]),
+    ]
+
+    result = _replace_front_matter_design_pages(page_layouts, render_result, figures_dir)
+
+    page0 = next(pl for pl in result if pl.page_num == 0)
+    assert page0.blocks[0].block_type == BlockType.PARAGRAPH
+    assert page0.blocks[0].text == "머리말 내용"
+
+
+def test_장구분_뒤의_그림_페이지는_영향받지_않는다(tmp_path):
+    """장 구분 이후 페이지는 유채색 비율이 높아도(그림 있는 본문 페이지)
+    이 함수가 건드리면 안 된다 -- 위치 조건이 유채색 비율 오탐을 막는다."""
+    photo_png = _make_photo_page_png(tmp_path, "p2.png")
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=3, page_images=[None, None, photo_png])
+
+    page_layouts = [
+        PageLayout(page_num=0, blocks=[_para_block("머리말")]),
+        PageLayout(page_num=1, blocks=[_heading_block("1장"), _heading_block("시작")]),
+        PageLayout(page_num=2, blocks=[_para_block("본문 설명")]),
+    ]
+
+    result = _replace_front_matter_design_pages(page_layouts, render_result, figures_dir)
+
+    page2 = next(pl for pl in result if pl.page_num == 2)
+    assert page2.blocks[0].block_type == BlockType.PARAGRAPH
+    assert page2.blocks[0].text == "본문 설명"
+
+
+def test_장구분_없는_문서는_전부_기존대로_유지된다(tmp_path):
+    """"N장" 형태 장 구분을 찾지 못하면(다른 책 형식) 이 처리를 하지 않고
+    page_layouts를 그대로 반환해야 한다."""
+    design_png = _make_design_page_png(tmp_path, "p0.png")
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    render_result = SimpleNamespace(page_count=1, page_images=[design_png])
+
+    page_layouts = [
+        PageLayout(page_num=0, blocks=[_para_block("차례처럼 보이지만 장구분 heading 없음")]),
+    ]
+
+    result = _replace_front_matter_design_pages(page_layouts, render_result, figures_dir)
+
+    assert result == page_layouts
+    assert result[0].blocks[0].block_type == BlockType.PARAGRAPH

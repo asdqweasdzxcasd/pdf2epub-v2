@@ -7,7 +7,7 @@
 첫 heading)으로 동작해야 한다.
 """
 from app.pipeline.layout import Block, BlockType, PageLayout
-from app.pipeline.toc import _extract_from_headings
+from app.pipeline.toc import _extract_from_headings, find_first_chapter_divider_page
 
 
 def _heading(text, level=1):
@@ -114,3 +114,36 @@ def test_장구분_후보가_전부_목차페이지면_폴백을_쓰지않고_�
     ]
     toc = _extract_from_headings(layouts)
     assert toc == []
+
+
+# --- find_first_chapter_divider_page ---
+
+
+def test_첫_장구분_페이지_번호를_반환한다():
+    layouts = [
+        PageLayout(page_num=0, blocks=[_heading("서문")]),
+        PageLayout(page_num=4, blocks=[_heading("1장"), _heading("인덱스 기초")]),
+        PageLayout(page_num=20, blocks=[_heading("2장"), _heading("트랜잭션")]),
+    ]
+    assert find_first_chapter_divider_page(layouts) == 4
+
+
+def test_장구분_없으면_None():
+    layouts = [
+        PageLayout(page_num=0, blocks=[_heading("서론"), _heading("소제목 A")]),
+        PageLayout(page_num=3, blocks=[_heading("본문 시작")]),
+    ]
+    assert find_first_chapter_divider_page(layouts) is None
+
+
+def test_장구분_후보가_전부_목차페이지면_None():
+    """장 구분(N장) heading이 있었지만 전부 한 페이지(목차 페이지)에
+    몰려있어 걸러지면(채택된 항목 0개), None을 반환해야 한다 -- 목차
+    페이지 자체가 '첫 장 구분 페이지'로 오인되면 안 된다."""
+    layouts = [
+        PageLayout(
+            page_num=1,
+            blocks=[_heading("1장"), _heading("2장"), _heading("3장")],
+        ),
+    ]
+    assert find_first_chapter_divider_page(layouts) is None

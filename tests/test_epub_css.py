@@ -34,13 +34,24 @@ def test_다크모드_보정_블록이_있다():
     assert "@media (prefers-color-scheme: dark)" in css
 
 
-def test_본문_body에는_font_family를_지정하지_않는다():
-    """리더 기본 폰트를 존중해야 하므로 body 셀렉터 규칙 블록에
-    font-family가 있으면 안 된다 (pre/code 등 모노스페이스 전용은 허용)."""
+def test_본문_body에는_generic_serif만_허용된다():
+    """리더 기본 폰트를 존중해야 하므로 body에 특정 폰트를 강제하면 안 된다.
+
+    이 테스트는 원래 "body에 font-family를 아예 지정하지 않는다"였다.
+    원본 지면과 대조한 결과 이 책은 명조(바탕) 계열로 조판돼 있어, generic
+    키워드인 "serif"만 예외로 허용하도록 의도를 갱신한다 -- serif는 특정
+    폰트를 못박지 않고 사용자가 리더에서 고른 serif 계열 폰트가 그대로
+    쓰이므로 "사용자가 고른 폰트를 덮어쓰지 않는다"는 원래 취지를 해치지
+    않는다. serif가 아닌 특정 폰트명(예: "Noto Serif KR")이 들어가면 이
+    테스트는 실패해야 한다.
+    """
     css = _css_text()
     match = re.search(r"(?<![\w.#])body\s*\{([^}]*)\}", css)
     assert match is not None, "body 규칙을 찾지 못함"
-    assert "font-family" not in match.group(1)
+    body_rule = match.group(1)
+    ff_match = re.search(r"font-family:\s*([^;]+);", body_rule)
+    assert ff_match is not None, "body에 generic serif font-family가 있어야 한다"
+    assert ff_match.group(1).strip() == "serif"
 
 
 def test_px_단위를_쓰지_않는다():

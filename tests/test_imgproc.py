@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from app.pipeline.imgproc import (
+    chroma_coverage,
     ink_coverage,
     is_blank_page,
     sample_block_background,
@@ -471,3 +472,37 @@ def test_밝은_픽셀_비율이_30퍼센트_미만이면_None():
     ImageDraw.Draw(img).rectangle((10, 10, 20, 20), fill=(250, 250, 250))
     bg = sample_block_background(img, (0, 0, 100, 60))
     assert bg is None
+
+
+# --- chroma_coverage ---
+
+
+def test_흰_페이지의_chroma_coverage는_0에_가깝다():
+    img = Image.new("RGB", (200, 200), (255, 255, 255))
+    assert chroma_coverage(img) < 0.01
+
+
+def test_검정_텍스트만_있는_페이지도_chroma_coverage가_낮다():
+    # 흑백 텍스트(회색조 -- 채도 0)만 있는 본문 페이지를 흉내낸다
+    img = Image.new("RGB", (200, 300), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    for y in range(20, 280, 15):
+        draw.rectangle((20, y, 180, y + 8), fill=(20, 20, 20))
+    assert chroma_coverage(img) < 0.01
+
+
+def test_컬러_밴드가_넓은_디자인_페이지는_chroma_coverage가_높다():
+    # 차례 페이지 등: 컬러 챕터 밴드가 페이지의 상당 부분을 채운다
+    img = Image.new("RGB", (200, 300), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((0, 0, 199, 30), fill=(230, 90, 60))  # 채도 170
+    cov = chroma_coverage(img)
+    assert cov > 0.04
+    # 실측 범위(0.048~0.098)에 근접한 대역
+    assert 0.09 < cov < 0.11
+
+
+def test_chroma_min_파라미터로_민감도_조정_가능():
+    img = Image.new("RGB", (100, 100), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((0, 0, 99, 9), fill=(240, 220, 230))  # 채도 20
+    assert chroma_coverage(img, chroma_min=25) == 0.0
+    assert chroma_coverage(img, chroma_min=15) > 0.0

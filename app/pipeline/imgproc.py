@@ -80,6 +80,32 @@ def ink_coverage(img: Image.Image, threshold: int = 235) -> float:
     return float(non_white.mean())
 
 
+def chroma_coverage(img: Image.Image, chroma_min: int = 25) -> float:
+    """페이지 전체에서 유채색(채도 chroma_min 이상) 픽셀이 차지하는 비율을 반환한다.
+
+    앞부분 디자인 페이지(차례, 책소개 등) 판정에 쓰인다 -- 컬러 챕터 밴드로
+    조판된 디자인 페이지는 유채색 픽셀 비율이 높은 반면, 본문 텍스트
+    페이지는 검정/회색 글자가 대부분이라 유채색 비율이 매우 낮다(실측:
+    디자인 페이지 0.048~0.098, 본문 텍스트 페이지 0.0006~0.0035). 단, 그림이
+    있는 본문 페이지는 이 값만으로 0.049까지 올라갈 수 있어 이 헬퍼 단독으로는
+    본문/디자인 페이지를 완전히 구분하지 못한다 -- 호출부가 "장 구분 페이지
+    이전"이라는 위치 조건과 함께 써야 한다.
+
+    픽셀의 채도(max(R,G,B) - min(R,G,B))가 chroma_min 이상이면 "유채색"으로
+    센다.
+
+    Args:
+        img: 판정할 페이지 이미지 (모드 무관 -- RGB로 변환해 스캔)
+        chroma_min: 유채색으로 볼 최소 채도
+
+    Returns:
+        유채색 픽셀 비율 (0~1)
+    """
+    rgb = _scan_rgb(img)
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    return float((chroma >= chroma_min).mean())
+
+
 _BG_BRIGHT_MIN = 180  # "밝은 픽셀"로 볼 min(R,G,B) 하한
 _BG_BRIGHT_OCCUPANCY = 0.3  # 밝은 픽셀이 이 비율 미만이면 배경 추출 포기(그림/표 등)
 _BG_WHITE_MIN = 244  # 중앙값 min이 이 값 초과면 흰색으로 보고 None

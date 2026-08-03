@@ -5,7 +5,9 @@ Block.bg(ocr_layout에서 페이지 이미지로부터 추출한 배경색)를 �
 묶여야 한다. 페이지 전체가 같은 색이면 그건 "박스"가 아니라 페이지
 배경이므로 틴트를 적용하지 않는다.
 """
-from app.pipeline.epub_build import _build_chapter_html
+import colorsys
+
+from app.pipeline.epub_build import _accent_color, _build_chapter_html
 from app.pipeline.layout import Block, BlockType, PageLayout
 
 
@@ -103,16 +105,46 @@ def test_기존_bg_없는_블록들은_회귀_없이_렌더된다():
 
 
 def test_틴트_박스에_배경보다_진한_왼쪽_막대색이_붙는다():
-    """원본 지면과 대조한 결과, 강조 밴드 왼쪽에는 같은 계열의 진한 막대가
-    있다. 배경색을 어둡게 눌러 만든 색이 border-left-color로 나가야 한다."""
+    """원본 지면과 대조한 결과, 강조 밴드 왼쪽에는 같은 색 계열의 선명한
+    막대가 있다. _accent_color(HLS 채도 부스트 + 밝기 감소)로 만든 색이
+    border-left-color로 나가야 한다 (단순히 채널마다 같은 비율로 어둡게
+    누르면 파스텔 배경에서 회색이 되어버리므로 그 방식은 쓰지 않는다)."""
     # 페이지 전체가 같은 색이면 "페이지 배경"으로 보고 틴트를 걸지 않는
     # 가드가 있으므로, 흰 배경 본문 블록을 함께 둔다 (실제 지면과 동일한 구성)
+    bg = (244, 248, 239)
     blocks = [
         Block(block_type=BlockType.HEADING, bbox=(0, 0, 0, 0), confidence=1.0,
-              text="재시도 횟수와 간격", bg=(244, 248, 239)),
+              text="재시도 횟수와 간격", bg=bg),
         Block(block_type=BlockType.PARAGRAPH, bbox=(0, 0, 0, 0), confidence=1.0,
               text="재시도할 때는 다음 2가지를 결정해야 한다.", bg=None),
     ]
     html = _build_chapter_html([PageLayout(page_num=0, blocks=blocks)], "장", {})
     assert "background-color:#f4f8ef" in html
-    assert "border-left-color:#868883" in html  # 각 채널 * 0.55
+    expected_accent = "#%02x%02x%02x" % _accent_color(bg)
+    assert f"border-left-color:{expected_accent}" in html
+
+
+def test_accent_color는_파스텔_입력을_어둡고_채도_높은_비회색으로_바꾼다():
+    """연분홍 파스텔처럼 채도가 낮은 배경도, 강조 막대는 (ㄱ) 원본보다
+    어둡고 (ㄴ) 원본보다 채도가 높고 (ㄷ) 회색이 아니어야 한다(채널 최대
+    차 30 이상) -- 채널별 동일 비율 감쇠(예: *0.55)는 이 세 조건 중 (ㄴ),
+    (ㄷ)을 만족 못 해 회색(#8b8283 등)이 되므로 이 테스트가 그 회귀를 막는다."""
+    pastel = (250, 235, 238)  # 연분홍
+    accent = _accent_color(pastel)
+
+    _, orig_l, orig_s = colorsys.rgb_to_hls(*(c / 255 for c in pastel))
+    _, acc_l, acc_s = colorsys.rgb_to_hls(*(c / 255 for c in accent))
+
+    assert acc_l < orig_l, "강조 막대는 원본보다 어두워야 한다"
+    assert acc_s > orig_s, "강조 막대는 원본보다 채도가 높아야 한다"
+    assert max(accent) - min(accent) >= 30, "강조 막대가 회색이면 안 된다"
+
+
+def test_accent_color는_무채색_입력을_회색으로_유지한다():
+    """회색(무채색) 배경은 존재하지 않는 색상을 억지로 만들면 안 되므로
+    채도를 올리지 않고 밝기만 낮춰 계속 회색이어야 한다."""
+    gray = (210, 210, 210)
+    accent = _accent_color(gray)
+
+    assert accent[0] == accent[1] == accent[2], "무채색 입력은 강조색도 무채색이어야 한다"
+    assert sum(accent) < sum(gray), "그래도 원본보다는 어두워야 한다"

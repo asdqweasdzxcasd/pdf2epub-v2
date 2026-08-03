@@ -15,7 +15,12 @@ from PIL import Image
 
 from app.config import settings
 from app.pipeline.epub_build import build_epub
-from app.pipeline.imgproc import ink_coverage, is_blank_page, trim_uniform_margins
+from app.pipeline.imgproc import (
+    chroma_coverage,
+    ink_coverage,
+    is_blank_page,
+    trim_uniform_margins,
+)
 from app.pipeline.layout import PageLayout
 from app.pipeline.ocr_api import MistralOcrClient, OcrApiError
 from app.pipeline.ocr_layout import build_layouts_from_ocr
@@ -23,7 +28,7 @@ from app.pipeline.pdf_render import RENDER_DPI, render
 from app.pipeline.progress import ProgressCallback
 from app.pipeline.refine import refine_small_text
 from app.pipeline.text_extract import build_layouts_from_text
-from app.pipeline.toc import extract_toc
+from app.pipeline.toc import extract_toc, find_first_chapter_divider_page
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +111,12 @@ def run_pipeline(
         # 그 안에 있던 CAPTION 등 refine 대상 블록도 함께 사라지는 게 맞다
         # (원본 render 페이지 이미지 기준으로 판정 — 트림 여부와 무관).
         page_layouts = _replace_cover_page(page_layouts, render_result, figures_dir)
+        # 앞부분(front matter) 디자인 페이지(차례 등) 판정도 refine보다 먼저
+        # — 페이지가 이미지로 통째 대체되면 그 안의 CAPTION 등 refine 대상
+        # 블록도 함께 사라지는 게 맞다 (표지 판정과 같은 이유).
+        page_layouts = _replace_front_matter_design_pages(
+            page_layouts, render_result, figures_dir
+        )
         # refine은 _fill_missing_pages 전에 실행 — fallback은 CAPTION이
         # 없어 refine 대상이 아님 (순서 바꾸면 좌표계 가정이 깨짐)
         if refine:
@@ -303,6 +314,80 @@ def _replace_cover_page(page_layouts, render_result, figures_dir):
         replaced.append(PageLayout(page_num=0, blocks=[cover_block]))
         replaced.sort(key=lambda pl: pl.page_num)
     return replaced
+
+
+_FRONT_MATTER_CHROMA_MIN = 0.04  # 이 이상 유채색 비율이면 컬러 디자인 페이지로 판정
+
+
+def _replace_front_matter_design_pages(page_layouts, render_result, figures_dir):
+    """장 구분 페이지보다 앞(front matter)에 있고 유채색 비율이 높은 디자인
+    페이지(차례, 책소개 등)를, 페이지 이미지 전체를 담은 FIGURE 블록 하나로
+    대체한다 — 컬러 챕터 밴드로 조판된 디자인은 텍스트로 재조판하면
+    사라지므로 표지와 같은 방식(페이지 이미지 임베드)으로 보존한다.
+
+    판정 조건 둘 다 필요:
+    1. find_first_chapter_divider_page로 찾은 첫 "N장" 구분 페이지보다
+       앞이어야 한다 — 장 구분 페이지를 못 찾으면(다른 책 형식) 이 함수는
+       아무것도 바꾸지 않고 page_layouts를 그대로 반환한다.
+    2. chroma_coverage(_FRONT_MATTER_CHROMA_MIN 이상)여야 한다 — 실측:
+       디자인 페이지 0.048~0.098, 본문 텍스트 페이지 0.0006~0.0035. 그림이
+       있는 본문 페이지는 0.049까지 올라갈 수 있어 유채색 비율만으로는
+       부족하므로 반드시 조건 1(장 구분 페이지 이전)과 함께 쓴다 — 장 구분
+       "이후"의 그림 페이지는 이 함수가 건드리지 않는다.
+
+    이미 FIGURE 블록 하나로만 이뤄진 페이지(표지 대체 등으로 이미 이미지가
+    된 경우)는 건드리지 않는다(중복 임베드 방지).
+    """
+    first_divider_page = find_first_chapter_divider_page(page_layouts)
+    if first_divider_page is None:
+        return page_layouts
+
+    page_images = getattr(render_result, "page_images", []) or []
+
+    # 지연 import — 표지 판정 경로와 같은 관례.
+    from app.pipeline.text_extract import embed_page_as_figure
+
+    replaced: list[PageLayout] = []
+    for layout in page_layouts:
+        if layout.page_num >= first_divider_page or _is_single_figure_layout(layout):
+            replaced.append(layout)
+            continue
+        if layout.page_num >= len(page_images):
+            replaced.append(layout)
+            continue
+        src = page_images[layout.page_num]
+        if src is None or not Path(src).exists():
+            replaced.append(layout)
+            continue
+
+        try:
+            with Image.open(src) as img:
+                coverage = chroma_coverage(img)
+        except Exception:
+            replaced.append(layout)
+            continue
+
+        if coverage < _FRONT_MATTER_CHROMA_MIN:
+            replaced.append(layout)
+            continue
+
+        block = embed_page_as_figure(render_result, layout.page_num, figures_dir)
+        if block is None:
+            replaced.append(layout)
+            continue
+        replaced.append(PageLayout(page_num=layout.page_num, blocks=[block]))
+
+    return replaced
+
+
+def _is_single_figure_layout(layout) -> bool:
+    """레이아웃이 이미 FIGURE 블록 하나로만 이뤄져 있는지 확인한다(표지
+    대체 등으로 이미 이미지 페이지가 된 경우 중복 처리를 피하기 위한 가드)."""
+    if len(layout.blocks) != 1:
+        return False
+    block_type = layout.blocks[0].block_type
+    value = block_type.value if hasattr(block_type, "value") else str(block_type)
+    return value == "figure"
 
 
 def _is_blank_page_image(render_result, page_num: int) -> bool:
