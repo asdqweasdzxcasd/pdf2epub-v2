@@ -77,18 +77,16 @@ h3 {
 }
 
 /* ============================================================
-   본문 문단 -- 한국어 책 관례상 "첫 줄 들여쓰기" 방식을 택한다.
-   들여쓰기와 문단 간 margin을 함께 쓰면 구분 표시가 중복돼 지저분해지므로
-   margin은 0으로 둔다 (여백 방식과 들여쓰기 방식 중 하나만 사용).
-   제목 바로 다음 첫 문단은 들여쓰지 않는다.
+   본문 문단 -- 원본 지면(캡처 이미지)과 대조한 결과 이 책은 첫 줄
+   들여쓰기를 쓰지 않고 문단 간 여백으로 구분하며 양쪽 정렬을 쓴다.
+   둘 중 하나만 써야 지저분하지 않으므로 여백 방식으로 통일한다.
+   양쪽 정렬은 한글 단어가 중간에 끊기지 않도록 word-break: keep-all과
+   함께 쓴다(전역 규칙에 이미 있음).
    ============================================================ */
 p {
-  text-indent: 1em;
-  margin: 0;
-}
-
-h1 + p, h2 + p, h3 + p {
   text-indent: 0;
+  margin: 0 0 0.7em;
+  text-align: justify;
 }
 
 /* ============================================================
@@ -268,10 +266,21 @@ sub {
    구체적으로(자손 셀렉터 *) 지정한다.
    ============================================================ */
 .tinted {
-  padding: 0.9em 1.1em;
-  margin: 1.2em 0;
-  border-radius: 0.4em;
+  padding: 0.4em 0.9em;
+  margin: 1.4em 0 0.9em;
+  border-radius: 0.2em;
+  border-left: 0.35em solid currentColor;
   page-break-inside: avoid;
+}
+
+/* 박스 안의 제목은 밴드 높이를 키우지 않게 위아래 여백을 줄인다 */
+.tinted h1, .tinted h2, .tinted h3 {
+  margin: 0.15em 0;
+  padding: 0;
+}
+
+.tinted p:last-child {
+  margin-bottom: 0;
 }
 .tinted, .tinted * {
   color: #1a1a1a;
@@ -669,10 +678,14 @@ def _render_page_with_tints(blocks: list, parts: list) -> None:
             _render_page_blocks(blocks[start:end], parts)
             if len(parts) > seg_start:
                 hex_color = "#%02x%02x%02x" % color
+                # 원본 책은 강조 밴드 왼쪽에 같은 계열의 진한 막대를 둔다.
+                # 배경색을 어둡게 눌러(0.55) 그 막대 색을 만든다.
+                accent = "#%02x%02x%02x" % tuple(int(c * 0.55) for c in color)
                 wrapped = parts[seg_start:]
                 del parts[seg_start:]
                 parts.append(
-                    f'<aside class="tinted" style="background-color:{hex_color}">'
+                    f'<aside class="tinted" style="background-color:{hex_color};'
+                    f'border-left-color:{accent}">'
                 )
                 parts.extend(wrapped)
                 parts.append("</aside>")

@@ -40,7 +40,7 @@ def test_같은_배경색_연속_블록_3개는_하나의_aside로_묶인다():
     html = _build_chapter_html([layout], "장", {})
 
     assert html.count('<aside class="tinted"') == 1
-    assert 'style="background-color:#f4f8ef"' in html
+    assert "background-color:#f4f8ef" in html
     aside_start = html.index('<aside class="tinted"')
     aside_end = html.index("</aside>")
     inner = html[aside_start:aside_end]
@@ -58,8 +58,8 @@ def test_배경색이_다르면_박스가_분리된다():
     html = _build_chapter_html([layout], "장", {})
 
     assert html.count('<aside class="tinted"') == 2
-    assert 'style="background-color:#f4f8ef"' in html
-    assert 'style="background-color:#f0f5fb"' in html
+    assert "background-color:#f4f8ef" in html
+    assert "background-color:#f0f5fb" in html
 
 
 def test_페이지_전체가_같은_색이면_틴트_미적용():
@@ -100,3 +100,19 @@ def test_기존_bg_없는_블록들은_회귀_없이_렌더된다():
     assert "<h1>제목</h1>" in html
     assert "<p>문단1</p>" in html
     assert "<p>문단2</p>" in html
+
+
+def test_틴트_박스에_배경보다_진한_왼쪽_막대색이_붙는다():
+    """원본 지면과 대조한 결과, 강조 밴드 왼쪽에는 같은 계열의 진한 막대가
+    있다. 배경색을 어둡게 눌러 만든 색이 border-left-color로 나가야 한다."""
+    # 페이지 전체가 같은 색이면 "페이지 배경"으로 보고 틴트를 걸지 않는
+    # 가드가 있으므로, 흰 배경 본문 블록을 함께 둔다 (실제 지면과 동일한 구성)
+    blocks = [
+        Block(block_type=BlockType.HEADING, bbox=(0, 0, 0, 0), confidence=1.0,
+              text="재시도 횟수와 간격", bg=(244, 248, 239)),
+        Block(block_type=BlockType.PARAGRAPH, bbox=(0, 0, 0, 0), confidence=1.0,
+              text="재시도할 때는 다음 2가지를 결정해야 한다.", bg=None),
+    ]
+    html = _build_chapter_html([PageLayout(page_num=0, blocks=blocks)], "장", {})
+    assert "background-color:#f4f8ef" in html
+    assert "border-left-color:#868883" in html  # 각 채널 * 0.55
