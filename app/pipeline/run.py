@@ -147,6 +147,11 @@ def run_pipeline(
     )
     logger.info("목차 항목: %d개", len(toc_entries))
 
+    if use_api:
+        # 목차 확보 이후에만 실행 -- 장 구분 페이지의 heading 텍스트("3장" 등)가
+        # 목차 생성에 필요한데, 여기서 이미지로 대체하면 텍스트가 사라진다.
+        page_layouts = _replace_design_pages(page_layouts, render_result, figures_dir)
+
     logger.info("EPUB 빌드 시작")
     build_epub(
         page_layouts=page_layouts,
@@ -368,6 +373,74 @@ def _replace_front_matter_design_pages(page_layouts, render_result, figures_dir)
             continue
 
         if coverage < _FRONT_MATTER_CHROMA_MIN:
+            replaced.append(layout)
+            continue
+
+        block = embed_page_as_figure(render_result, layout.page_num, figures_dir)
+        if block is None:
+            replaced.append(layout)
+            continue
+        replaced.append(PageLayout(page_num=layout.page_num, blocks=[block]))
+
+    return replaced
+
+
+_DESIGN_PAGE_INK_THRESHOLD = 0.5  # 이 이상 비백색이면 전면 컬러 "디자인 페이지"로 판정
+
+
+def _replace_design_pages(page_layouts, render_result, figures_dir):
+    """잉크 비율(ink_coverage)이 높은 모든 페이지를 페이지 이미지 전체를 담은
+    FIGURE 블록 하나로 대체한다 -- 표지뿐 아니라 장 구분 페이지("1장" 등
+    전면 컬러 표지 격 페이지)도 텍스트만 뽑으면 밋밋해지므로 원본 디자인을
+    이미지로 보존한다.
+
+    반드시 extract_toc 호출 뒤에만 실행해야 한다 -- 장 구분 페이지의 heading
+    텍스트("N장", 장 이름)가 목차 생성(_extract_chapter_dividers)에 쓰이는데,
+    여기서 이미지로 먼저 대체하면 그 텍스트가 사라져 목차가 비어버린다.
+
+    판정 조건 둘 다 필요:
+    1. ink_coverage >= _DESIGN_PAGE_INK_THRESHOLD (실측: 표지 0.947, 장
+       구분 페이지 0.985~0.993, 본문 텍스트 페이지 0.016~0.15).
+    2. is_blank_page(단색)가 아니어야 한다 -- 챕터 구분용 단색 백지는 이
+       규칙이 아니라 _fill_missing_pages가 별도로 제외한다(이미지로
+       대체하면 무의미한 빈 이미지가 남으므로).
+
+    대체 시 PageLayout.page_num은 반드시 보존한다 --
+    _split_into_chapters(epub_build.py)가 page_num 기준으로 챕터를 나누므로,
+    이를 지키지 않으면 챕터 분할이 깨진다.
+
+    이미 FIGURE 블록 하나로만 이뤄진 페이지(표지/앞부분 디자인 페이지 대체
+    등으로 이미 이미지가 된 경우)는 건드리지 않는다(중복 임베드 방지).
+    """
+    page_images = getattr(render_result, "page_images", []) or []
+
+    # 지연 import -- 표지/앞부분 디자인 판정 경로와 같은 관례.
+    from app.pipeline.text_extract import embed_page_as_figure
+
+    replaced: list[PageLayout] = []
+    for layout in page_layouts:
+        if _is_single_figure_layout(layout):
+            replaced.append(layout)
+            continue
+        if layout.page_num >= len(page_images):
+            replaced.append(layout)
+            continue
+        src = page_images[layout.page_num]
+        if src is None or not Path(src).exists():
+            replaced.append(layout)
+            continue
+
+        try:
+            with Image.open(src) as img:
+                if is_blank_page(img):
+                    replaced.append(layout)
+                    continue
+                coverage = ink_coverage(img)
+        except Exception:
+            replaced.append(layout)
+            continue
+
+        if coverage < _DESIGN_PAGE_INK_THRESHOLD:
             replaced.append(layout)
             continue
 
