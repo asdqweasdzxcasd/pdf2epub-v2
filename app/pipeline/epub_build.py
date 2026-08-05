@@ -9,6 +9,7 @@ from uuid import uuid4
 from ebooklib import epub
 
 from app.pipeline.markdown_inline import to_xhtml
+from app.pipeline.text_merge import merge_lines, split_soft_wrapped_paragraphs
 
 logger = logging.getLogger(__name__)
 
@@ -559,12 +560,18 @@ def _build_chapter_html(
     chapter_title: str,
     image_items: dict[str, object],
 ) -> str:
-    """챕터의 XHTML 컨텐츠를 생성한다.
+    r"""챕터의 XHTML 컨텐츠를 생성한다.
 
     block_type별 변환 규칙:
     - heading → <h1>/<h2>/<h3> (level 기준. 짧은 제목이라고 강등하지 않음 -
       이유는 _NOISE_HEADING_RE 자리의 주석 참고)
-    - paragraph → <p> (줄바꿈 단위로 분리)
+    - paragraph → <p>. Mistral 응답은 마크다운이므로 마크다운 문단 규칙을
+      따른다 -- 빈 줄(`\n\s*\n`)만 문단 구분으로 보고 별개 <p>를 만든다.
+      단일 줄바꿈은 원본 지면의 줄바꿈일 뿐이므로 같은 문단으로 이어붙인다
+      (app.pipeline.text_merge.split_soft_wrapped_paragraphs, 조사로
+      이어지면 공백 없이 그 외엔 공백 하나). aside/caption/footnote도
+      같은 헬퍼(또는 단일 문단만 필요할 땐 merge_lines)를 써서 줄바꿈이
+      문단으로 쪼개지지 않게 한다. CODE만 예외로 줄바꿈을 그대로 보존한다.
     - list_item → 같은 페이지에서 연속된 LIST_ITEM들을 목록으로 묶는다.
       마커 종류(불릿 vs 번호)가 바뀌는 지점에서 목록을 분리한다 (합치지
       않음). 번호 목록은 첫 항목의 마커 숫자를 <ol start="N">으로 보존한다
@@ -767,11 +774,10 @@ def _render_page_blocks(blocks: list, parts: list) -> None:
             elif bt == "paragraph":
                 text = block.text.strip() if block.text else ""
                 if text:
-                    # 줄바꿈 단위로 <p> 분리
-                    for line in text.split("\n"):
-                        line = line.strip()
-                        if line:
-                            parts.append(f"<p>{to_xhtml(line)}</p>")
+                    # 빈 줄만 문단 구분으로 본다. 단일 줄바꿈은 지면
+                    # 줄바꿈일 뿐이므로 같은 문단으로 이어붙인다.
+                    for para in split_soft_wrapped_paragraphs(text):
+                        parts.append(f"<p>{to_xhtml(para)}</p>")
 
             elif bt == "list_item":
                 # 연속된 LIST_ITEM 블록들을 하나의 <ul>/<ol>로 묶는다.
@@ -812,10 +818,11 @@ def _render_page_blocks(blocks: list, parts: list) -> None:
             elif bt == "aside":
                 text = block.text.strip() if block.text else ""
                 if text:
+                    # paragraph와 동일한 규칙 -- 단일 줄바꿈은 같은 문단으로
+                    # 이어붙이고, 빈 줄만 새 <p>로 나눈다.
                     inner_parts = [
-                        f"<p>{to_xhtml(line.strip())}</p>"
-                        for line in text.split("\n")
-                        if line.strip()
+                        f"<p>{to_xhtml(para)}</p>"
+                        for para in split_soft_wrapped_paragraphs(text)
                     ]
                     if inner_parts:
                         parts.append('<aside class="memo">')
@@ -826,7 +833,7 @@ def _render_page_blocks(blocks: list, parts: list) -> None:
                 next_block = blocks[i + 1] if i + 1 < n else None
                 if next_block is not None and _block_type_str(next_block) == "caption":
                     caption_text = (
-                        next_block.text.strip() if next_block.text else ""
+                        merge_lines(next_block.text) if next_block.text else ""
                     )
                     parts.append(_figure_html(block.image_path, caption_text))
                     i += 2
@@ -848,7 +855,7 @@ def _render_page_blocks(blocks: list, parts: list) -> None:
             elif bt == "caption":
                 next_block = blocks[i + 1] if i + 1 < n else None
                 next_bt = _block_type_str(next_block) if next_block is not None else ""
-                caption_text = block.text.strip() if block.text else ""
+                caption_text = merge_lines(block.text) if block.text else ""
 
                 if next_bt == "figure" and next_block.image_path:
                     parts.append(_figure_html(next_block.image_path, caption_text))
@@ -871,7 +878,7 @@ def _render_page_blocks(blocks: list, parts: list) -> None:
                     )
 
             elif bt == "footnote":
-                text = block.text.strip() if block.text else ""
+                text = merge_lines(block.text) if block.text else ""
                 if text:
                     parts.append(
                         f'<div class="footnote">'

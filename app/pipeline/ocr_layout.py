@@ -50,16 +50,6 @@ _BG_TYPES = frozenset({
 # 다시 트림해 제거한다 (Task 4)
 _PAD_OUT = 6
 
-# 문장이 이미 끝났다고 볼 수 있는 종결 문자(공백 제외 후 마지막 글자 기준)
-_SENTENCE_END_CHARS = frozenset('.!?…"\')]》」')
-
-# 한국어 조사/어미 후보 — 뒤 블록이 이 글자로 시작하고 바로 다음 글자가
-# 공백이면 "앞 블록에 붙는 조사"로 보고 병합 대상으로 삼는다.
-# (예: "는 소켓" -> "는"은 앞 단어 HttpClient에 붙는 조사)
-# 주의: 문자 단위 판정이라 "이 책은..."처럼 실제로는 새 문장이 시작하는
-# 경우도 오탐으로 병합될 수 있다 — 보수적 규칙이라도 완벽하지는 않다.
-_JOSA_CHARS = frozenset("는은이가를을에의도로와과만라며고서나든")
-
 
 def map_block_type(mistral_type: str) -> BlockType:
     """미지 타입은 PARAGRAPH 폴백 — API 스펙 확장에 대비."""
@@ -91,13 +81,25 @@ def build_layouts_from_ocr(
     figures_dir: Path,
     progress=None,
 ) -> list[PageLayout]:
-    """Mistral 응답 pages 배열을 PageLayout 리스트로 변환한다.
+    r"""Mistral 응답 pages 배열을 PageLayout 리스트로 변환한다.
 
     블록은 응답의 reading order를 그대로 따른다 (재정렬 안 함).
     텍스트 블록의 bbox는 Mistral 응답 좌표계 원본 그대로 보존한다 —
     현재 하류 소비자(epub_build, toc)는 bbox를 쓰지 않으며, 픽셀 좌표가
     필요한 소비자는 scale_bbox()로 변환해야 한다 (크롭 경로가 그렇게 함).
     image/equation 블록 크롭은 Task 2에서 구현되었다.
+
+    연속 PARAGRAPH 블록을 이어붙이는 병합은 하지 않는다 (예전에 있었으나
+    제거됨). 실측 캐시(ebook-converter/testdata/ocr-cache)로 확인한 결과
+    Mistral OCR은 한 문단 전체를 블록 하나로 주고 그 안의 지면 줄바꿈만
+    `\n`으로 보존한다 -- 즉 "문단이 여러 블록으로 쪼개지는" 문제 자체가
+    실제로는 드물다. 반면 예전 병합 휴리스틱(연속 블록 + 문장 미종결 +
+    조사/소문자 시작)을 실측 데이터에 그대로 적용해 보면 검출된 36건 전부가
+    오탐이었다 -- 색인 페이지의 표제어들(예: "Event-Driven Architecture
+    310" + "eventual consistency 133"), text로 오분류된 코드 줄들(Java/SQL
+    라인이 순서대로 병합됨), TOC/제목처럼 보이는 짧은 줄들. 진짜 원인(지면
+    줄바꿈)은 app/pipeline/epub_build.py가 블록 텍스트를 렌더링할 때
+    처리한다(app/pipeline/text_merge.split_soft_wrapped_paragraphs).
     """
     figures_dir.mkdir(parents=True, exist_ok=True)
     layouts: list[PageLayout] = []
@@ -145,82 +147,9 @@ def build_layouts_from_ocr(
         finally:
             if page_img is not None:
                 page_img.close()
-        blocks = _merge_paragraph_blocks(blocks)
         layouts.append(PageLayout(page_num=page_num, blocks=blocks))
 
     return layouts
-
-
-def _starts_with_josa_candidate(text: str) -> bool:
-    """text가 조사 후보 글자로 시작하고, 그 다음 글자가 공백인지(또는 글자가
-    하나뿐인지) 본다. 이 경우 "앞 단어에 붙는 조사"로 보고 병합 신호로 삼는다."""
-    if not text or text[0] not in _JOSA_CHARS:
-        return False
-    return len(text) == 1 or text[1] == " "
-
-
-def _starts_with_lowercase_latin(text: str) -> bool:
-    """영문 소문자로 시작하면 영문 문장이 중간에 끊긴 것으로 본다."""
-    return bool(text) and text[0].isascii() and text[0].isalpha() and text[0].islower()
-
-
-def _should_merge(prev: Block, nxt: Block) -> bool:
-    """연속된 두 블록이 OCR이 잘못 쪼갠 같은 문단인지 보수적으로 판정한다.
-
-    셋 다 만족해야 병합 대상:
-    1) 둘 다 PARAGRAPH이고 bg가 같음 (다른 배경 박스의 문단이면 병합 안 함)
-    2) 앞 블록이 문장 종결 부호로 끝나지 않음
-    3) 뒤 블록이 이어짐 신호(조사 후보+공백, 또는 소문자 라틴)로 시작함
-    """
-    if prev.block_type is not BlockType.PARAGRAPH or nxt.block_type is not BlockType.PARAGRAPH:
-        return False
-    if prev.bg != nxt.bg:
-        return False
-    prev_text = prev.text.rstrip()
-    if not prev_text or prev_text[-1] in _SENTENCE_END_CHARS:
-        return False
-    nxt_text = nxt.text.lstrip()
-    if not nxt_text:
-        return False
-    return _starts_with_josa_candidate(nxt_text) or _starts_with_lowercase_latin(nxt_text)
-
-
-def _merge_text(prev_text: str, next_text: str) -> str:
-    """두 블록의 텍스트를 이어붙인다.
-
-    뒤 텍스트가 한글 조사로 시작하면 공백 없이 붙이고(앞 단어에 붙는 조사이므로),
-    소문자 라틴으로 시작하면 공백 하나를 넣어 붙인다(끊긴 영문 단어 사이 구분).
-    """
-    prev = prev_text.rstrip()
-    nxt = next_text.lstrip()
-    if nxt and nxt[0] in _JOSA_CHARS:
-        return prev + nxt
-    return prev + " " + nxt
-
-
-def _merge_paragraph_blocks(blocks: list[Block]) -> list[Block]:
-    """OCR이 줄 단위로 쪼갠 문단(연속 PARAGRAPH 블록)을 이어붙인다.
-
-    Mistral OCR은 가끔 한 문단을 여러 text 블록으로 나눠 반환한다(줄바꿈마다
-    새 블록). 렌더링 시 블록 1개 = 문단 1개이므로 그대로 두면 문장이 조사로
-    시작하는 등 부자연스럽게 끊긴 문단이 여러 개 생긴다. 3개 이상 연속도
-    순차 병합으로 하나로 합쳐진다.
-    """
-    merged: list[Block] = []
-    for blk in blocks:
-        if merged and _should_merge(merged[-1], blk):
-            prev = merged[-1]
-            merged[-1] = Block(
-                block_type=prev.block_type,
-                bbox=prev.bbox,
-                confidence=prev.confidence,
-                text=_merge_text(prev.text, blk.text),
-                level=prev.level,
-                bg=prev.bg,
-            )
-            continue
-        merged.append(blk)
-    return merged
 
 
 def _open_page_image(page_num: int, page_images: list[Path]) -> Image.Image | None:

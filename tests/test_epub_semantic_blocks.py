@@ -172,13 +172,25 @@ def test_aside_블록은_memo_클래스로_렌더링된다():
     assert "<strong>중요한</strong>" in html
 
 
-def test_aside_블록의_여러줄은_각각_p로_렌더링된다():
+def test_aside_단일_줄바꿈은_문단으로_안_쪼개진다():
+    """예전엔 블록 안의 단일 줄바꿈마다 <p>를 나눴으나, 그건 원본 지면의
+    줄바꿈일 뿐이므로 이제는 같은 문단으로 이어붙여야 한다."""
     layout = PageLayout(page_num=0, blocks=[
         _block(BlockType.ASIDE, "첫째 줄\n둘째 줄"),
     ])
     html = _build_chapter_html([layout], "장", {})
-    assert "<p>첫째 줄</p>" in html
-    assert "<p>둘째 줄</p>" in html
+    assert html.count("<p>") == 1
+    assert "<p>첫째 줄 둘째 줄</p>" in html
+
+
+def test_aside_빈_줄로_구분된_문단은_각각_p로_렌더링된다():
+    layout = PageLayout(page_num=0, blocks=[
+        _block(BlockType.ASIDE, "첫째 문단\n\n둘째 문단"),
+    ])
+    html = _build_chapter_html([layout], "장", {})
+    assert html.count("<p>") == 2
+    assert "<p>첫째 문단</p>" in html
+    assert "<p>둘째 문단</p>" in html
 
 
 # --- 짧은 제목 heading (강등 제거) ---
