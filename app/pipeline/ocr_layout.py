@@ -75,6 +75,21 @@ def scale_bbox(block: dict, img_w: int, img_h: int, page_dim: dict) -> tuple[int
     return int(x0 * sx), int(y0 * sy), int(x1 * sx), int(y1 * sy)
 
 
+def _is_decorative_noise(text: str) -> bool:
+    """한 글자짜리 라틴 문자·기호 블록인지 판정한다 (장식 요소 오인식).
+
+    책의 챕터 마커 배지(초록 상자 안의 'B' 아이콘 등)가 title/text 블록으로
+    잡혀 본문에 외톨이 문단으로 반복 등장했다(실측 55회). 한국어 기술서
+    본문에서 한 글자짜리 라틴 문자나 기호가 독립 문단·제목일 수는 없으므로
+    버린다. 한글 한 글자("그"), 숫자, 두 글자 이상("IP")은 의미를 가질 수
+    있으므로 보존한다 — 규칙을 좁게 유지해 정상 텍스트 손실을 막는다.
+    """
+    t = text.strip()
+    if len(t) != 1:
+        return False
+    return not (t.isdigit() or "\uac00" <= t <= "\ud7a3")
+
+
 def build_layouts_from_ocr(
     pages: list[dict],
     page_images: list[Path],
@@ -127,6 +142,8 @@ def build_layouts_from_ocr(
                 content = (raw.get("content") or "").strip()
                 if not content:
                     continue
+                if _is_decorative_noise(parse_heading(content)[1]):
+                    continue  # 장식 배지 등 한 글자 노이즈
                 try:
                     bbox = (
                         float(raw["top_left_x"]), float(raw["top_left_y"]),

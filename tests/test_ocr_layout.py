@@ -341,3 +341,25 @@ def test_bbox가_테두리를_못담으면_콘텐츠_경계까지_확장된다(t
     assert max(int(dark[:, x].sum()) for x in range(dark.shape[1])) >= 280, "세로 테두리 미포함"
     # 그리고 크롭 마지막 행/열에 콘텐츠 stub이 걸려있지 않아야 한다 (잘림 흔적 없음)
     assert int(dark[-1].sum()) == 0 and int(dark[:, -1].sum()) == 0, "경계에 잘린 stub 존재"
+
+
+def test_한글자_라틴_기호_블록은_장식_노이즈로_버린다(tmp_path):
+    """책의 장식 배지(예: 챕터 마커 'B' 아이콘)가 title/text 블록으로 잡혀
+    본문에 외톨이 'B' 문단으로 55회 나타났다. 한 글자짜리 라틴 문자나 기호는
+    한국어 기술서 본문에서 의미를 가질 수 없으므로 버린다.
+    한글 한 글자, 숫자, 두 글자 이상('IP')은 보존한다."""
+    def blocks_for(content, btype="text"):
+        pages = [{
+            "index": 0, "dimensions": {}, "markdown": "",
+            "blocks": [{"type": btype, "top_left_x": 0.1, "top_left_y": 0.1,
+                        "bottom_right_x": 0.9, "bottom_right_y": 0.2,
+                        "content": content}],
+        }]
+        return build_layouts_from_ocr(pages, page_images=[], figures_dir=tmp_path)[0].blocks
+
+    assert blocks_for("B") == []          # 장식 배지
+    assert blocks_for("}") == []          # 코드 조각 파편
+    assert blocks_for("# B", "title") == []
+    assert len(blocks_for("IP")) == 1     # 정상 약어
+    assert len(blocks_for("그")) == 1     # 한글 한 글자
+    assert len(blocks_for("7")) == 1      # 숫자
