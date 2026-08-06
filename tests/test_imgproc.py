@@ -584,3 +584,33 @@ def test_chroma_min_파라미터로_민감도_조정_가능():
     ImageDraw.Draw(img).rectangle((0, 0, 99, 9), fill=(240, 220, 230))  # 채도 20
     assert chroma_coverage(img, chroma_min=25) == 0.0
     assert chroma_coverage(img, chroma_min=15) > 0.0
+
+
+def test_프레임이_박스_안팎에_걸쳐_있어도_찾는다():
+    """실측(page_0018) 형태 재현: 장식 테두리가 세로로는 이미 크롭 박스
+    안쪽에 들어와 있고 가로로만 박스 바깥에 있는 경우. '4변 모두 바깥으로
+    탐색' 방식으로는 위/아래를 못 찾아 확장이 실패했다."""
+    page = Image.new("RGB", (400, 400), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+    frame = (200, 183, 211)  # 실측 테두리색 계열 (채도 28)
+    draw.rectangle((40, 120, 359, 279), outline=frame, width=2)
+    draw.rectangle((150, 150, 249, 249), fill=(0, 0, 0))  # 다이어그램 콘텐츠
+
+    # 박스: 세로는 테두리를 이미 품고(118~281), 가로는 테두리 안쪽(140~260)
+    out = expand_to_frame(page, (140, 118, 260, 282))
+    ox0, oy0, ox1, oy1 = out
+    assert ox0 <= 40 and ox1 >= 360, f"가로로 테두리까지 확장되지 않음: {out}"
+    assert oy0 <= 120 and oy1 >= 280, f"세로 테두리를 잃음: {out}"
+
+
+def test_프레임이_한_변만_없으면_확장하지_않는다():
+    page = Image.new("RGB", (400, 400), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+    frame = (200, 183, 211)
+    # 위/좌/우만 그리고 아래는 비움 -> 완전한 박스가 아님
+    draw.line((40, 120, 359, 120), fill=frame, width=2)
+    draw.line((40, 120, 40, 279), fill=frame, width=2)
+    draw.line((359, 120, 359, 279), fill=frame, width=2)
+    draw.rectangle((150, 150, 249, 249), fill=(0, 0, 0))
+    box = (140, 118, 260, 282)
+    assert expand_to_frame(page, box) == box
