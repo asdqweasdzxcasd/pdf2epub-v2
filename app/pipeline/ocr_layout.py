@@ -10,7 +10,11 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.pipeline.imgproc import sample_block_background, strip_chromatic_frame
+from app.pipeline.imgproc import (
+    expand_to_frame,
+    sample_block_background,
+    strip_chromatic_frame,
+)
 from app.pipeline.layout import Block, BlockType, PageLayout
 from app.pipeline.markdown_inline import parse_heading
 
@@ -269,8 +273,15 @@ def _crop_block(
             x0, y0, x1, y1 = _extend_to_content_boundary(img, x0, y0, x1, y1)
             x0, y0 = max(0, x0 - _PAD_OUT), max(0, y0 - _PAD_OUT)
             x1, y1 = min(w, x1 + _PAD_OUT), min(h, y1 + _PAD_OUT)
-            crop = img.crop((x0, y0, x1, y1))
-            crop = strip_chromatic_frame(crop)  # 채도 프레임 제거 + 여백 트림
+            fx0, fy0, fx1, fy1 = expand_to_frame(img, (x0, y0, x1, y1))
+            if (fx0, fy0, fx1, fy1) != (x0, y0, x1, y1):
+                # 완전한 장식 프레임(4변 모두)을 찾음 -- 프레임 바깥까지 포함해
+                # 크롭하고, 일부러 살린 테두리를 strip_chromatic_frame이 다시
+                # 벗기지 않도록 건너뛴다.
+                crop = img.crop((fx0, fy0, fx1, fy1))
+            else:
+                crop = img.crop((x0, y0, x1, y1))
+                crop = strip_chromatic_frame(crop)  # 불완전한 프레임 조각 제거 + 여백 트림
             filename = f"page_{page_num:04d}_blk_{blk_idx:03d}.png"
             crop.save(figures_dir / filename)
             return filename

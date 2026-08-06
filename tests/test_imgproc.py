@@ -4,6 +4,7 @@ from PIL import Image, ImageDraw
 
 from app.pipeline.imgproc import (
     chroma_coverage,
+    expand_to_frame,
     ink_coverage,
     is_blank_page,
     sample_block_background,
@@ -369,6 +370,83 @@ def test_프레임_벗긴_뒤_초연분홍_잔여_링도_제거된다():
     chroma = arr.max(axis=2) - arr.min(axis=2)
     assert not np.any(chroma >= 8), "연분홍 잔여물이 남음"
     assert _black_pixel_count(result) == 6400
+
+
+# --- expand_to_frame ---
+
+
+def _make_framed_diagram_page(
+    size=300, margin=30, frame_width=8, gap=25, diagram_half=70,
+    frame_color=(195, 129, 191),
+):
+    """흰 배경 위에 완전한 보라 테두리 사각형(frame_color) + 그 안쪽 흰 여백
+    (gap) + 중앙 검은 다이어그램을 그린 페이지를 만든다 (동심 사각형).
+
+    바깥에서 안쪽 순서: 흰 여백(margin) → 프레임(frame_width) → 흰 여백(gap)
+    → 검은 다이어그램. strip_chromatic_frame 테스트의 halo/frame 동심원
+    기법과 같은 방식이나, 여기서는 반대 방향(박스에서 바깥으로) 탐색을
+    검증하는 데 쓴다.
+
+    Returns:
+        (페이지 이미지, 다이어그램 bbox (x0, y0, x1, y1) — x1/y1은 배타적 상한)
+    """
+    from PIL import ImageDraw
+
+    page = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+    fo0, fo1 = margin, size - 1 - margin
+    draw.rectangle((fo0, fo0, fo1, fo1), fill=frame_color)
+    inner0, inner1 = fo0 + frame_width, fo1 - frame_width
+    draw.rectangle((inner0, inner0, inner1, inner1), fill=(255, 255, 255))
+    cx = cy = size // 2
+    d0, d1 = cx - diagram_half, cy + diagram_half - 1
+    draw.rectangle((d0, d0, d1, d1), fill=(0, 0, 0))
+    return page, (d0, d0, d1 + 1, d1 + 1), (fo0, fo0, fo1 + 1, fo1 + 1)
+
+
+def test_완전한_프레임이_있으면_바깥_경계_pad2까지_확장된다():
+    page, box, frame_outer = _make_framed_diagram_page()
+    result = expand_to_frame(page, box)
+
+    fx0, fy0, fx1, fy1 = frame_outer
+    # 프레임 바깥 경계에서 pad 2px 더 나간 좌표까지 확장돼야 한다
+    assert result == (fx0 - 2, fy0 - 2, fx1 + 2, fy1 + 2)
+
+    # 확장된 크롭에는 프레임 색과 다이어그램 콘텐츠가 모두 남아 있어야 한다
+    crop = page.crop(result)
+    arr = np.asarray(crop.convert("RGB"), dtype=np.int16)
+    assert np.any(np.all(arr == (195, 129, 191), axis=2)), "프레임 색이 크롭에 없음"
+    assert _black_pixel_count(crop) == (2 * 70) ** 2
+
+
+def test_한_변에_프레임이_없으면_원래_박스_그대로_반환된다():
+    """4변 중 하나라도 프레임을 못 찾으면 완전한 박스가 아니므로 원본을
+    그대로 반환해야 한다 -- 상단 프레임 밴드를 흰색으로 지워 재현."""
+    from PIL import ImageDraw
+
+    page, box, frame_outer = _make_framed_diagram_page()
+    fo0, _, fo1, _ = frame_outer
+    ImageDraw.Draw(page).rectangle((fo0, fo0, fo1 - 1, fo0 + 8 - 1), fill=(255, 255, 255))
+
+    result = expand_to_frame(page, box)
+    assert result == box
+
+
+def test_max_expand_안에_프레임이_없으면_원래_박스_그대로_반환된다():
+    """gap(25)+frame_width(8)=33px보다 작은 max_expand를 주면 탐색 윈도우
+    안에 프레임이 다 들어오지 못해 원본 박스를 그대로 반환해야 한다."""
+    page, box, _ = _make_framed_diagram_page(gap=25, frame_width=8)
+    result = expand_to_frame(page, box, max_expand=10)
+    assert result == box
+
+
+def test_박스가_이미_전체_이미지면_원래_박스_반환():
+    """바깥으로 확장할 페이지 영역 자체가 없는(박스가 이미지 전체를 덮는)
+    경우에도 죽지 않고 원본 box를 반환해야 한다."""
+    page = Image.new("RGB", (50, 50), (255, 255, 255))
+    box = (0, 0, 50, 50)
+    result = expand_to_frame(page, box)
+    assert result == box
 
 
 # --- is_blank_page ---

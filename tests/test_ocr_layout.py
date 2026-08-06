@@ -343,6 +343,59 @@ def test_bbox가_테두리를_못담으면_콘텐츠_경계까지_확장된다(t
     assert int(dark[-1].sum()) == 0 and int(dark[:, -1].sum()) == 0, "경계에 잘린 stub 존재"
 
 
+def _make_page_with_decorative_frame(tmp_path, size=300, margin=30, frame_width=8,
+                                      gap=25, diagram_half=70,
+                                      frame_color=(195, 129, 191)):
+    """흰 배경 + 완전한 보라 테두리 사각형(4변) + 그 안쪽 검은 다이어그램이
+    있는 페이지 PNG를 만든다 (imgproc의 expand_to_frame 테스트와 같은 동심
+    사각형 구조). 반환하는 bbox는 다이어그램에 딱 맞는 타이트한 박스다."""
+    from PIL import Image, ImageDraw
+
+    page = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+    fo0, fo1 = margin, size - 1 - margin
+    draw.rectangle((fo0, fo0, fo1, fo1), fill=frame_color)
+    inner0, inner1 = fo0 + frame_width, fo1 - frame_width
+    draw.rectangle((inner0, inner0, inner1, inner1), fill=(255, 255, 255))
+    cx = cy = size // 2
+    d0, d1 = cx - diagram_half, cy + diagram_half - 1
+    draw.rectangle((d0, d0, d1, d1), fill=(0, 0, 0))
+    p = tmp_path / "page_000.png"
+    page.save(p)
+    return p, (d0, d0, d1 + 1, d1 + 1)
+
+
+def test_완전한_장식_프레임이_있으면_크롭에_테두리가_남는다(tmp_path):
+    """Task: 그림을 둘러싼 완전한 장식 테두리(연보라 둥근 사각 박스)는 원본
+    디자인이므로 strip_chromatic_frame으로 벗겨내면 안 되고, 그 바깥까지
+    포함해 크롭해야 한다 -- '박스 안쪽에서 잘려 나온다'는 사용자 리포트 대응.
+
+    (참고) 이전에는 _crop_block이 모든 크롭에 strip_chromatic_frame을 무조건
+    적용해 완전한 프레임까지 함께 지워졌다. 이제는 expand_to_frame이 완전한
+    4변 프레임을 찾으면 그 프레임을 포함해 크롭하고 strip_chromatic_frame을
+    건너뛴다 -- 프레임이 지저분한 "조각"으로 남는 문제(기존 strip 테스트들이
+    다루는 halo/모서리 호 잔여물)와, 완전한 프레임을 통째로 보존해야 하는
+    문제는 서로 다른 케이스다."""
+    page_png, box = _make_page_with_decorative_frame(tmp_path)
+    figures = tmp_path / "figures"
+    pages = [{
+        "index": 0, "dimensions": {"width": 300, "height": 300}, "markdown": "",
+        "blocks": [{"type": "image", "top_left_x": box[0], "top_left_y": box[1],
+                    "bottom_right_x": box[2], "bottom_right_y": box[3], "content": ""}],
+    }]
+    layouts = build_layouts_from_ocr(pages, page_images=[page_png], figures_dir=figures)
+    blk = layouts[0].blocks[0]
+    assert blk.image_path
+
+    import numpy as np
+    from PIL import Image as PILImage
+    crop = np.asarray(PILImage.open(figures / blk.image_path).convert("RGB"), dtype=np.int16)
+    assert np.any(np.all(crop == (195, 129, 191), axis=2)), "장식 프레임 색이 크롭에서 사라짐"
+    # 다이어그램 콘텐츠(140x140)도 잘리지 않고 온전히 보존돼야 한다
+    dark = crop.max(axis=2) < 10
+    assert int(dark.sum()) == 140 * 140
+
+
 def test_한글자_라틴_기호_블록은_장식_노이즈로_버린다(tmp_path):
     """책의 장식 배지(예: 챕터 마커 'B' 아이콘)가 title/text 블록으로 잡혀
     본문에 외톨이 'B' 문단으로 55회 나타났다. 한 글자짜리 라틴 문자나 기호는

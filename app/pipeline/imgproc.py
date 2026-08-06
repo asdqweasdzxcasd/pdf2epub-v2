@@ -333,6 +333,86 @@ def _edge_frame_depth(
     return 0  # 창 소진 — 배경 재개를 못 봤으면 프레임으로 확정하지 않는다
 
 
+def expand_to_frame(
+    page_img: Image.Image,
+    box: tuple[int, int, int, int],
+    max_expand: int = 120,
+) -> tuple[int, int, int, int]:
+    """크롭 박스를 감싸는 완전한 장식 프레임이 있으면 그 바깥 경계까지 확장한다.
+
+    책 다이어그램은 연보라 둥근 사각 테두리 박스 안에 들어 있고, 그 박스는
+    본문 단 너비를 꽉 채우는 원본 디자인이다. `_extend_to_content_boundary` +
+    `_PAD_OUT`으로 잡은 박스는 다이어그램 콘텐츠에는 딱 맞지만 이 장식
+    테두리보다 안쪽에서 멈추므로, 최종 크롭에 테두리의 오른쪽·아래쪽이
+    잘려 나온다. 이 함수는 박스 바깥쪽으로 탐색해 4변 모두에서 완전한
+    프레임 밴드를 찾으면 그 바깥 경계 + 여백 2px까지 확장한 좌표를 돌려준다.
+
+    변별 판정은 `_edge_frame_depth`를 그대로 재사용한다 -- 그 함수는 "배경
+    (무채색 여백) 행 0개 이상 → 프레임 성분(고채도 밴드 또는 근사 균일한
+    유채색) 1행 이상 → 배경 행 재개"를 만나면 그 지점까지의 깊이를 확정
+    반환하는 라인 스캐너다. `strip_chromatic_frame`은 이 배열을 "크롭
+    가장자리(바깥) → 안쪽" 방향으로 넘겨 프레임을 벗겨내는 데 쓰지만, 여기서는
+    반대로 "박스 경계(안쪽) → 페이지 바깥" 방향으로 정렬한 배열을 넘긴다 --
+    박스와 프레임 사이의 흰 여백은 위 정의의 "배경 행"으로, 프레임 밴드는
+    "프레임 성분"으로, 프레임 바깥 페이지 여백은 "재개된 배경"으로 그대로
+    대응되므로 탐색 방향만 바꾸면 로직 중복 없이 재사용할 수 있다.
+
+    halo_allow=0으로 호출하고 max_band(=탐색 윈도우)를 max_expand로 크게
+    잡는다 -- outward 탐색은 halo/밴드 두께 상한을 따로 둘 필요가 없고,
+    윈도우 전체(박스~프레임 바깥 배경)가 max_expand 이내여야 한다는 게
+    유일한 제약이기 때문이다.
+
+    4변 중 하나라도 프레임을 찾지 못하면(깊이 0) 완전한 박스가 아니라고
+    보고 원래 box를 그대로 반환한다 -- 다른 그림 형식(장식 프레임이 없는
+    사진 등)을 잘못 확장하지 않기 위한 안전장치.
+
+    Args:
+        page_img: 박스가 속한 페이지 전체 이미지 (모드 무관 -- RGB 변환 후 스캔)
+        box: 확장 전 크롭 박스, 페이지 픽셀 좌표 (x0, y0, x1, y1). x1/y1은
+            crop 관례상 배타적 상한.
+        max_expand: 변당 바깥으로 확장할 상한(px)
+
+    Returns:
+        완전한 프레임을 찾으면 그 바깥 경계 + pad 2px까지 확장한 좌표,
+        아니면 입력 box 그대로.
+    """
+    x0, y0, x1, y1 = (int(v) for v in box)
+    if x1 <= x0 or y1 <= y0:
+        return box
+
+    rgb = _scan_rgb(page_img)
+    h, w = rgb.shape[:2]
+    xa, ya = max(0, min(x0, w)), max(0, min(y0, h))
+    xb, yb = max(0, min(x1, w)), max(0, min(y1, h))
+    if xb <= xa or ya >= yb:
+        return box
+
+    chroma_min, span_min = 40, 0.7  # strip_chromatic_frame과 동일한 프레임 판정 기준
+
+    top_strip = rgb[max(0, ya - max_expand):ya, xa:xb, :][::-1, :, :]
+    d_top = _edge_frame_depth(top_strip, max_expand, chroma_min, span_min, 0)
+
+    bottom_strip = rgb[yb:min(h, yb + max_expand), xa:xb, :]
+    d_bottom = _edge_frame_depth(bottom_strip, max_expand, chroma_min, span_min, 0)
+
+    left_strip = rgb[ya:yb, max(0, xa - max_expand):xa, :][:, ::-1, :].transpose(1, 0, 2)
+    d_left = _edge_frame_depth(left_strip, max_expand, chroma_min, span_min, 0)
+
+    right_strip = rgb[ya:yb, xb:min(w, xb + max_expand), :].transpose(1, 0, 2)
+    d_right = _edge_frame_depth(right_strip, max_expand, chroma_min, span_min, 0)
+
+    if d_top == 0 or d_bottom == 0 or d_left == 0 or d_right == 0:
+        return box  # 4변 중 하나라도 못 찾음 -- 완전한 프레임이 아니므로 원본 유지
+
+    pad = 2
+    return (
+        max(0, x0 - d_left - pad),
+        max(0, y0 - d_top - pad),
+        min(w, x1 + d_right + pad),
+        min(h, y1 + d_bottom + pad),
+    )
+
+
 _CORNER_WINDOW = 18  # 모서리 호 탐색 창 한 변(px)
 _CORNER_MAX_AREA_FRAC = 0.6  # 창 대비 이 비율보다 큰 성분은 콘텐츠로 보고 보존
 

@@ -16,7 +16,6 @@ from PIL import Image
 from app.config import settings
 from app.pipeline.epub_build import build_epub
 from app.pipeline.imgproc import (
-    chroma_coverage,
     ink_coverage,
     is_blank_page,
     trim_uniform_margins,
@@ -321,24 +320,31 @@ def _replace_cover_page(page_layouts, render_result, figures_dir):
     return replaced
 
 
-_FRONT_MATTER_CHROMA_MIN = 0.04  # 이 이상 유채색 비율이면 컬러 디자인 페이지로 판정
-
-
 def _replace_front_matter_design_pages(page_layouts, render_result, figures_dir):
-    """장 구분 페이지보다 앞(front matter)에 있고 유채색 비율이 높은 디자인
-    페이지(차례, 책소개 등)를, 페이지 이미지 전체를 담은 FIGURE 블록 하나로
-    대체한다 — 컬러 챕터 밴드로 조판된 디자인은 텍스트로 재조판하면
-    사라지므로 표지와 같은 방식(페이지 이미지 임베드)으로 보존한다.
+    """장 구분 페이지보다 앞(front matter)에 있는 모든 페이지를, 단색 백지가
+    아닌 한 페이지 이미지 전체를 담은 FIGURE 블록 하나로 대체한다.
 
-    판정 조건 둘 다 필요:
+    판권/서지 정보 페이지(저자 소개, 발행처 정보 등)는 인쇄 기준 7~8pt의
+    아주 작은 글씨로 조판되는데, Mistral OCR이 페이지를 내부 ~1020px로
+    정규화하는 과정에서 글자가 뭉개져 오타가 다발한다(실측: "최범균"→
+    "최법균", "한빛미디어"→"한발미디어", "펴낸이"→"파낸이" 등). 이런 페이지는
+    애초에 읽을 본문이 아니라 판권·서지 정보이자 책 디자인의 일부이므로,
+    텍스트로 재조판하는 대신 표지와 같은 방식(페이지 이미지 임베드)으로
+    원본 그대로 보존하는 편이 낫다.
+
+    이전에는 chroma_coverage(유채색 비율 ≥ 0.04) 조건을 추가로 걸어 컬러
+    디자인 페이지(차례 등)만 대체했지만, 저채도(무채색에 가까운) 판권
+    페이지도 OCR 오타 문제를 똑같이 겪으므로 그 조건을 없애고 "장 구분
+    페이지 이전의 모든 페이지"로 범위를 넓혔다.
+
+    판정 조건:
     1. find_first_chapter_divider_page로 찾은 첫 "N장" 구분 페이지보다
        앞이어야 한다 — 장 구분 페이지를 못 찾으면(다른 책 형식) 이 함수는
        아무것도 바꾸지 않고 page_layouts를 그대로 반환한다.
-    2. chroma_coverage(_FRONT_MATTER_CHROMA_MIN 이상)여야 한다 — 실측:
-       디자인 페이지 0.048~0.098, 본문 텍스트 페이지 0.0006~0.0035. 그림이
-       있는 본문 페이지는 0.049까지 올라갈 수 있어 유채색 비율만으로는
-       부족하므로 반드시 조건 1(장 구분 페이지 이전)과 함께 쓴다 — 장 구분
-       "이후"의 그림 페이지는 이 함수가 건드리지 않는다.
+    2. is_blank_page(단색)가 아니어야 한다 — 챕터 구분용 단색 백지는
+       판권 페이지가 아니라 무의미한 이미지 임베드일 뿐이며,
+       _fill_missing_pages가 별도로 통째 제외를 담당하므로 여기서는
+       손대지 않고 그대로 둔다.
 
     이미 FIGURE 블록 하나로만 이뤄진 페이지(표지 대체 등으로 이미 이미지가
     된 경우)는 건드리지 않는다(중복 임베드 방지).
@@ -367,12 +373,10 @@ def _replace_front_matter_design_pages(page_layouts, render_result, figures_dir)
 
         try:
             with Image.open(src) as img:
-                coverage = chroma_coverage(img)
+                if is_blank_page(img):
+                    replaced.append(layout)
+                    continue
         except Exception:
-            replaced.append(layout)
-            continue
-
-        if coverage < _FRONT_MATTER_CHROMA_MIN:
             replaced.append(layout)
             continue
 
